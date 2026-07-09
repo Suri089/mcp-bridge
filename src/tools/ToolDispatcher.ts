@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { Logger } from '../core/Logger';
 import { AssetPatcher } from '../utils/AssetPatcher';
 import { OfflinePrefabEditor } from '../utils/OfflinePrefabEditor';
+import { PrefabSkeletonGenerator } from '../utils/PrefabSkeletonGenerator';
 import { CommandQueue } from '../core/CommandQueue';
 import { McpWrappers } from '../core/McpWrappers';
 declare const Editor: any;
@@ -530,6 +531,10 @@ export class ToolDispatcher {
 				});
 				break;
 
+			case "create_prefab_skeleton":
+				ToolDispatcher.createPrefabSkeleton(args, callback);
+				break;
+
 			case "modify_prefab_offline": {
 				const prefabFsPath = Editor.assetdb.urlToFspath(args.prefabUrl);
 				if (!prefabFsPath) {
@@ -715,6 +720,142 @@ export class ToolDispatcher {
 	 * @param {Object} args 参数
 	 * @param {Function} callback 完成回调
 	 */
+	/**
+	 * 根据标准化蓝图创建 prefab 节点骨架。
+	 * 这是 modify_prefab_offline 的高层封装：AI 只需要给节点树，不需要直接拼底层 JSON 操作。
+	 */
+  static createPrefabSkeleton(args, callback) {
+		const prefabUrl = ToolDispatcher.normalizePrefabUrl(args.prefabUrl);
+		if (!prefabUrl || !prefabUrl.startsWith("db://assets/")) {
+			return callback("prefabUrl 必须是 db://assets/ 下的 .prefab 路径。");
+		}
+
+		const plan = PrefabSkeletonGenerator.createPlan({
+			rootName: args.rootName,
+			root: args.root || {},
+			nodes: args.nodes || [],
+		});
+
+		if (!plan.valid) {
+			return callback(`prefab 蓝图校验失败：\n- ${plan.errors.join("\n- ")}`);
+		}
+
+		const prefabFsPath = ToolDispatcher.resolveAssetFsPath(prefabUrl);
+		if (!prefabFsPath) {
+			return callback(`预制体路径解析失败: ${prefabUrl}`);
+		}
+
+		const exists = fs.existsSync(prefabFsPath);
+		if (exists && !args.overwrite) {
+			return callback(`预制体已存在: ${prefabUrl}。如需重建骨架，请显式传入 overwrite: true。`);
+		}
+
+		let operations = plan.operations.slice();
+		try {
+			ToolDispatcher.writeEmptyPrefabSkeleton(prefabFsPath, plan.rootName);
+			operations = operations.slice(1);
+		} catch (e) {
+			return callback(`初始化 prefab 骨架失败: ${(e as Error).message}`);
+		}
+
+		const result = OfflinePrefabEditor.modify(prefabFsPath, operations);
+		if (!result.success) {
+			return callback(`创建 prefab 骨架失败: ${result.error}`);
+		}
+
+		AssetPatcher.fixPrefabRootFileId(prefabFsPath);
+
+		const warningText = plan.warnings.length > 0 ? `\n提示：\n- ${plan.warnings.join("\n- ")}` : "";
+		callback(null, `prefab 骨架已创建: ${prefabUrl}${warningText}`);
+
+		setTimeout(() => {
+			if (Editor && Editor.assetdb) {
+				Editor.assetdb.refresh(prefabUrl, (err) => {
+					if (err) {
+						console.warn(`[mcp-bridge] prefab 骨架创建后刷新资产失败: ${err.message}`);
+					}
+				});
+			}
+		}, 200);
+	}
+
+  static normalizePrefabUrl(prefabUrl: string): string {
+		if (!prefabUrl || typeof prefabUrl !== "string") {
+			return "";
+		}
+		const trimmed = prefabUrl.trim();
+		return trimmed.endsWith(".prefab") ? trimmed : `${trimmed}.prefab`;
+	}
+
+  static resolveAssetFsPath(assetUrl: string): string | null {
+		const fsPath = Editor.assetdb.urlToFspath(assetUrl);
+		if (fsPath) {
+			return fsPath;
+		}
+		if (assetUrl.startsWith("db://assets/")) {
+			const assetsRoot = Editor.assetdb.urlToFspath("db://assets");
+			if (assetsRoot) {
+				return pathModule.join(assetsRoot, assetUrl.substring("db://assets/".length));
+			}
+		}
+		return null;
+	}
+
+  static writeEmptyPrefabSkeleton(prefabFsPath: string, rootName: string) {
+		const parentDir = pathModule.dirname(prefabFsPath);
+		if (!fs.existsSync(parentDir)) {
+			fs.mkdirSync(parentDir, { recursive: true });
+		}
+
+		const data = [
+			{
+				__type__: "cc.Prefab",
+				_name: "",
+				_objFlags: 0,
+				_native: "",
+				data: { __id__: 1 },
+				optimizationPolicy: 0,
+				asyncLoadAssets: false,
+				readonly: false,
+			},
+			{
+				__type__: "cc.Node",
+				_name: rootName,
+				_objFlags: 0,
+				_parent: null,
+				_children: [],
+				_components: [],
+				_active: true,
+				_prefab: { __id__: 2 },
+				_opacity: 255,
+				_color: { __type__: "cc.Color", r: 255, g: 255, b: 255, a: 255 },
+				_contentSize: { __type__: "cc.Size", width: 100, height: 100 },
+				_anchorPoint: { __type__: "cc.Vec2", x: 0.5, y: 0.5 },
+				_trs: {
+					__type__: "TypedArray",
+					ctor: "Float64Array",
+					array: [0, 0, 0, 0, 0, 0, 1, 1, 1, 1],
+				},
+				_eulerAngles: { __type__: "cc.Vec3", x: 0, y: 0, z: 0 },
+				_skewX: 0,
+				_skewY: 0,
+				_is3DNode: false,
+				_groupIndex: 0,
+				groupIndex: 0,
+				_id: "",
+			},
+			{
+				__type__: "cc.PrefabInfo",
+				root: { __id__: 1 },
+				asset: { __id__: 0 },
+				fileId: OfflinePrefabEditor.generateFileId(),
+				sync: false,
+			},
+		];
+
+		fs.writeFileSync(prefabFsPath, JSON.stringify(data, null, 2), "utf8");
+	}
+
 	/**
 	 * 通过自定义场景脚本创建预制体
 	 * scene-script 中 create-prefab 处理器将 Editor.serialize() 的场景格式输出

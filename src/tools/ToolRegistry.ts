@@ -598,6 +598,83 @@ export const getToolsList = () => {
 			inputSchema: { type: "object", properties: {} },
 		},
 		{
+			name: "create_prefab_skeleton",
+			description: `【AI 界面骨架生成】根据标准化节点蓝图创建一个新的 Cocos 2.4 prefab。用于“只根据效果图/界面需求先把节点搭出来”的场景，不追求像素级还原。强制节点命名使用 node_/lbl_/btn_/spr_/list_/item_ 等前缀；会自动为 lbl_ 挂 cc.Label，为 spr_ 挂 cc.Sprite，为 btn_ 挂 cc.Sprite + cc.Button。复杂业务脚本、协议、红点、精细布局不在此工具范围内。`,
+			inputSchema: {
+				type: "object",
+				properties: {
+					prefabUrl: {
+						type: "string",
+						description: "新 prefab 路径，如 db://assets/resources/prefab/view/shop/NewShopView.prefab",
+					},
+					rootName: {
+						type: "string",
+						description: "prefab 根节点名，通常使用界面类名，如 NewShopView。",
+					},
+					root: {
+						type: "object",
+						description: "根节点基础属性。",
+						properties: {
+							width: { type: "number" },
+							height: { type: "number" },
+							x: { type: "number" },
+							y: { type: "number" },
+							anchorX: { type: "number" },
+							anchorY: { type: "number" },
+						},
+					},
+					nodes: {
+						type: "array",
+						description:
+							"节点蓝图。父节点必须先在蓝图中声明；path 使用 '/' 表示层级，如 node_top/lbl_title。",
+						items: {
+							type: "object",
+							properties: {
+								path: {
+									type: "string",
+									description: "节点路径，如 node_top/lbl_title。每个路径段必须使用标准前缀和小写 snake_case。",
+								},
+								type: {
+									type: "string",
+									enum: [
+										"node",
+										"sprite",
+										"label",
+										"button",
+										"list",
+										"item",
+										"scroll",
+										"toggle",
+										"layout",
+										"mask",
+										"animation",
+										"spine",
+										"bar",
+									],
+									description: "节点类型；不传时会从节点前缀推断。",
+								},
+								width: { type: "number" },
+								height: { type: "number" },
+								x: { type: "number" },
+								y: { type: "number" },
+								anchorX: { type: "number" },
+								anchorY: { type: "number" },
+								opacity: { type: "number" },
+								active: { type: "boolean" },
+								text: { type: "string", description: "label 节点的占位文本。" },
+							},
+							required: ["path"],
+						},
+					},
+					overwrite: {
+						type: "boolean",
+						description: "是否覆盖已存在的 prefab。默认 false；建议只在确认重建骨架时使用。",
+					},
+				},
+				required: ["prefabUrl", "rootName", "nodes"],
+			},
+		},
+		{
 			name: "modify_prefab_offline",
 			description: `【离线高效预制体修改】在不打开编辑器预制体窗口的情况下，直接通过底层的 JSON 结构修改预制体数据，并刷新 AssetDB。支持 update_property, add_component, remove_component, add_node, remove_node, clone_node, reorder_child, set_reference 操作。如果预制体文件本身不存在且第一个基动作为 add_node 且 targetPath 为空，则工具将无中生有自动初始化空预制体。`,
 			inputSchema: {

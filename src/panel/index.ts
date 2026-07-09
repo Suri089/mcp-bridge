@@ -126,21 +126,23 @@ Editor.Panel.extend({
 		}
 
 		// 3. 基础控制按钮逻辑
-		els.btnToggle.addEventListener("confirm", () => {
+		if (els.btnToggle) els.btnToggle.addEventListener("confirm", () => {
 			Editor.Ipc.sendToMain("mcp-bridge:toggle-server", parseInt(els.port.value));
 		});
 
-		root.querySelector("#btnClear").addEventListener("confirm", () => {
+		const btnClear = root.querySelector("#btnClear");
+		if (btnClear) btnClear.addEventListener("confirm", () => {
 			els.logView.innerHTML = "";
 			Editor.Ipc.sendToMain("mcp-bridge:clear-logs");
 		});
 
-		root.querySelector("#btnCopy").addEventListener("confirm", () => {
+		const btnCopy = root.querySelector("#btnCopy");
+		if (btnCopy) btnCopy.addEventListener("confirm", () => {
 			require("electron").clipboard.writeText(els.logView.innerText);
 			Editor.success("日志已复制到剪贴板");
 		});
 
-		els.autoStart.addEventListener("change", (e) => {
+		if (els.autoStart) els.autoStart.addEventListener("change", (e) => {
 			Editor.Ipc.sendToMain("mcp-bridge:set-auto-start", e.target.value);
 		});
 
