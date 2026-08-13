@@ -131,18 +131,18 @@ $targets = @(
     [pscustomobject]@{ Name = 'CodeBuddy CLI'; Path = Join-Path $HOME '.codebuddy\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'CodeWhale'; Path = Join-Path $HOME '.codewhale\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'Deepseek-TUI'; Path = Join-Path $HOME '.deepseek\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Codex'; Path = Join-Path $HOME '.codex\config.toml'; Format = 'toml'; RootKey = '' },
-    [pscustomobject]@{ Name = 'Cursor'; Path = Join-Path $HOME '.cursor\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Gemini CLI'; Path = Join-Path $HOME '.gemini\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Codex'; Path = Join-Path $HOME '.codex\config.toml'; DetectPath = Join-Path $HOME '.codex'; Format = 'toml'; RootKey = '' },
+    [pscustomobject]@{ Name = 'Cursor'; Path = Join-Path $HOME '.cursor\mcp.json'; DetectPath = Join-Path $HOME '.cursor'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Gemini CLI'; Path = Join-Path $HOME '.gemini\mcp.json'; DetectPath = Join-Path $HOME '.gemini'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'GitHub Copilot CLI'; Path = Join-Path $HOME '.config\github-copilot\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Kilo Code'; Path = Join-Path $HOME '.kilo\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Kiro'; Path = Join-Path $HOME '.kiro\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'OpenCode'; Path = Join-Path $HOME '.opencode\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Qwen Code'; Path = Join-Path $HOME '.qwen\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Kilo Code'; Path = Join-Path $HOME '.kilo\mcp.json'; DetectPath = Join-Path $HOME '.kilo'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Kiro'; Path = Join-Path $HOME '.kiro\mcp.json'; DetectPath = Join-Path $HOME '.kiro'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'OpenCode'; Path = Join-Path $HOME '.opencode\mcp.json'; DetectPath = Join-Path $HOME '.opencode'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Qwen Code'; Path = Join-Path $HOME '.qwen\mcp.json'; DetectPath = Join-Path $HOME '.qwen'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'Rider GitHub Copilot'; Path = Join-Path $appDataDirectory 'JetBrains\Rider\github-copilot\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'Roo Code'; Path = Join-Path $appDataDirectory 'Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\cline_mcp_settings.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Trae'; Path = Join-Path $HOME '.trae\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
-    [pscustomobject]@{ Name = 'Trae CN'; Path = Join-Path $HOME '.trae-cn\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Trae'; Path = Join-Path $HOME '.trae\mcp.json'; DetectPath = Join-Path $HOME '.trae'; Format = 'json'; RootKey = 'mcpServers' },
+    [pscustomobject]@{ Name = 'Trae CN'; Path = Join-Path $HOME '.trae-cn\mcp.json'; DetectPath = Join-Path $HOME '.trae-cn'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'VSCode GitHub Copilot'; Path = Join-Path $appDataDirectory 'Code\User\globalStorage\github.copilot\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'VSCode Insiders GitHub Copilot'; Path = Join-Path $appDataDirectory 'Code - Insiders\User\globalStorage\github.copilot\mcp.json'; Format = 'json'; RootKey = 'mcpServers' },
     [pscustomobject]@{ Name = 'Windsurf'; Path = Join-Path $HOME '.codeium\windsurf\mcp_config.json'; Format = 'json'; RootKey = 'mcpServers' },
@@ -158,8 +158,7 @@ if ($Clients -and $Clients.Count -gt 0) {
 } else {
     $selectedTargets = $targets | Where-Object {
         $detectProperty = $_.PSObject.Properties['DetectPath']
-        $detectPath = if ($detectProperty) { $detectProperty.Value } else { Split-Path -Parent $_.Path }
-        (Test-Path -LiteralPath $_.Path) -or (Test-Path -LiteralPath $detectPath)
+        (Test-Path -LiteralPath $_.Path) -or ($detectProperty -and (Test-Path -LiteralPath $detectProperty.Value))
     }
 }
 

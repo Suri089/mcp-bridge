@@ -58,7 +58,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-ai-cli
 脚本会：
 
 1. 构建并复制 `dist/mcp-proxy.js`；
-2. 扫描本机已安装的 AI 客户端；
+2. 通过已有配置文件或客户端专属目录扫描本机已安装的 AI 客户端；
 3. 为已有配置创建带时间戳的备份；
 4. 增量写入 `mcp-bridge` 配置；
 5. 保留其他 MCP Server 和非 MCP 设置。
