@@ -67,6 +67,13 @@ if (-not $hasUpstream) {
 
 Write-Host "Repository: $repoRoot"
 Write-Host "Current branch: $currentBranch"
+
+$originFetchSpec = '+refs/heads/*:refs/remotes/origin/*'
+$configuredFetchSpecs = Invoke-Git -Arguments @('config', '--get-all', 'remote.origin.fetch') -Capture
+if ($configuredFetchSpecs -notcontains $originFetchSpec) {
+    Write-Host 'Expanding origin fetch configuration to include all branches...'
+    Invoke-Git -Arguments @('config', 'remote.origin.fetch', $originFetchSpec)
+}
 Invoke-Git -Arguments @('fetch', 'origin', '--prune')
 
 $isShallow = (Invoke-Git -Arguments @('rev-parse', '--is-shallow-repository') -Capture | Select-Object -First 1).Trim()
@@ -110,8 +117,15 @@ try {
         Invoke-Git -Arguments @('push', 'origin', $BaseBranch)
     }
 } catch {
+    $recoveryStatus = Invoke-Git -Arguments @('status', '--porcelain') -Capture
+    if ($recoveryStatus) {
+        Invoke-Git -Arguments @('restore', '--staged', '--worktree', '--source=HEAD', '--', '.')
+    }
     if ($currentBranch -ne $BaseBranch) {
-        & git -C $repoRoot switch $currentBranch 2>$null
+        $activeBranch = (Invoke-Git -Arguments @('branch', '--show-current') -Capture | Select-Object -First 1).Trim()
+        if ($activeBranch -ne $currentBranch) {
+            Invoke-Git -Arguments @('switch', $currentBranch)
+        }
     }
     throw
 }

@@ -32,6 +32,11 @@ else
     git -C "$REPO_ROOT" remote add upstream "$UPSTREAM_REPO"
 fi
 
+ORIGIN_FETCH_SPEC='+refs/heads/*:refs/remotes/origin/*'
+if ! git -C "$REPO_ROOT" config --get-all remote.origin.fetch | grep -Fxq "$ORIGIN_FETCH_SPEC"; then
+    echo '[INFO] 扩展 origin 拉取配置以包含全部分支...'
+    git -C "$REPO_ROOT" config remote.origin.fetch "$ORIGIN_FETCH_SPEC"
+fi
 git -C "$REPO_ROOT" fetch origin --prune
 if [[ "$(git -C "$REPO_ROOT" rev-parse --is-shallow-repository)" == 'true' ]]; then
     git -C "$REPO_ROOT" fetch origin --unshallow
