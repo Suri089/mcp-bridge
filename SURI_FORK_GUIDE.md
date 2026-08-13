@@ -124,3 +124,13 @@ PowerShell 版本的常用选项：
 - `-SkipPushBase`：不推送 `origin/main`，只执行本地同步。
 
 脚本发现脏工作区、非 fast-forward 的 `main` 或合并冲突时会停止，不执行强制重置。
+
+## MCP 协议冒烟测试
+
+构建完成后运行：
+
+```powershell
+npm run test:mcp
+```
+
+测试会启动一个独立代理进程，验证初始化版本、服务器 instructions、完整工具列表、实例发现、有效实例选择和无效端口拒绝。测试不会修改 Cocos 场景或资源。
