@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { Logger } from '../core/Logger';
 import { AssetPatcher } from '../utils/AssetPatcher';
 import { OfflinePrefabEditor } from '../utils/OfflinePrefabEditor';
+import { UiBlueprint } from '../utils/UiBlueprint';
 import { CommandQueue } from '../core/CommandQueue';
 import { McpWrappers } from '../core/McpWrappers';
 declare const Editor: any;
@@ -206,7 +207,7 @@ export class ToolDispatcher {
             "batch_execute", "manage_asset", "scene_management", "prefab_management",
             "manage_editor", "manage_animation", "manage_material", "manage_texture",
             "manage_shader", "execute_menu_item", "apply_text_edits", "manage_undo",
-            "manage_vfx", "modify_prefab_offline"
+            "manage_vfx", "modify_prefab_offline", "apply_ui_blueprint"
         ];
         if (writeOperations.includes(name)) {
             ToolDispatcher.clearScreenshotCache();
@@ -216,6 +217,30 @@ export class ToolDispatcher {
 			return callback("编辑器正忙（正在处理场景），请稍候。");
 		}
 				switch (name) {
+			case "scan_ui_assets":
+				try {
+					callback(null, UiBlueprint.scanAssets(args || {}));
+				} catch (error) {
+					callback(`UI 资产盘点失败: ${error.message}`);
+				}
+				break;
+
+			case "dry_run_ui_blueprint":
+				try {
+					callback(null, UiBlueprint.dryRun(args.blueprintPath));
+				} catch (error) {
+					callback(`UI 蓝图预检失败: ${error.message}`);
+				}
+				break;
+
+			case "apply_ui_blueprint":
+				ToolDispatcher.applyUiBlueprint(args || {}, callback);
+				break;
+
+			case "validate_ui_blueprint":
+				ToolDispatcher.validateUiBlueprint(args || {}, callback);
+				break;
+
 			case "capture_editor_screenshot": {
 				const now = Date.now();
 				const profile = Editor.Profile.load("profile://project/mcp-bridge.json", "mcp-bridge");
@@ -754,6 +779,317 @@ export class ToolDispatcher {
 				callback(`Unknown tool: ${name}`);
 				break;
 		}
+	}
+
+	/**
+	 * 对当前打开的 Prefab/场景执行蓝图语义校验。
+	 */
+	static validateUiBlueprint(args, callback) {
+		let loaded;
+		try {
+			loaded = UiBlueprint.load(args.blueprintPath);
+			const validation = UiBlueprint.validate(loaded.blueprint);
+			if (!validation.valid) {
+				return callback(null, validation);
+			}
+		} catch (error) {
+			return callback(`读取 UI 蓝图失败: ${error.message}`);
+		}
+		CommandQueue.callSceneScriptWithTimeout(
+			"mcp-bridge",
+			"validate-ui-blueprint",
+			{ blueprint: loaded.blueprint },
+			callback,
+		);
+	}
+
+	/**
+	 * 将整份 UI 蓝图作为单次 Creator 事务应用。
+	 * 目标存在时进入 Prefab 编辑模式后更新；目标不存在时通过 Editor.serialize 创建新 Prefab。
+	 */
+	static applyUiBlueprint(args, callback) {
+		let loaded;
+		let dryRun;
+		try {
+			loaded = UiBlueprint.load(args.blueprintPath);
+			dryRun = UiBlueprint.dryRun(args.blueprintPath);
+		} catch (error) {
+			return callback(`读取 UI 蓝图失败: ${error.message}`);
+		}
+		if (!dryRun.valid) {
+			return callback(null, dryRun);
+		}
+		if (dryRun.missingAssets.length > 0) {
+			return callback(null, {
+				...dryRun,
+				valid: false,
+				errors: [`存在 ${dryRun.missingAssets.length} 个无法解析的资源路径`],
+			});
+		}
+
+		const blueprint = loaded.blueprint;
+		const targetUrl = blueprint.target.prefab;
+		const targetMode = blueprint.target.mode || "update-or-create";
+		const targetExists = Editor.assetdb.exists(targetUrl);
+		if (targetExists && targetMode === "create-only") {
+			return callback(`目标 Prefab 已存在，但蓝图指定了 create-only: ${targetUrl}`);
+		}
+		if (!targetExists && targetMode === "update-only") {
+			return callback(`目标 Prefab 不存在，但蓝图指定了 update-only: ${targetUrl}`);
+		}
+		let originalPrefabSource = null;
+		if (targetExists) {
+			try {
+				const prefabFspath = Editor.assetdb.urlToFspath(targetUrl);
+				if (!prefabFspath || !fs.existsSync(prefabFspath)) {
+					return callback(`无法读取目标 Prefab，已拒绝修改: ${targetUrl}`);
+				}
+				originalPrefabSource = fs.readFileSync(prefabFspath, "utf8");
+				JSON.parse(originalPrefabSource);
+			} catch (error) {
+				return callback(`目标 Prefab 现有内容无法安全备份或解析，已拒绝修改: ${error.message}`);
+			}
+		}
+
+		const save = args.save !== false;
+		const closeAfterSave = args.closeAfterSave === true;
+		const openDelayMs = Math.max(500, Math.min(Number(args.openDelayMs) || 1800, 10000));
+		ToolDispatcher.isSceneBusy = true;
+
+		const finish = (err, result) => {
+			ToolDispatcher.isSceneBusy = false;
+			callback(err, result);
+		};
+
+		const closeCurrentPrefab = (done) => {
+			CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "close-prefab", {}, done);
+		};
+
+		const openTargetAndProbe = (done) => {
+			const prefabUuid = Editor.assetdb.urlToUuid(targetUrl);
+			if (!prefabUuid) return done(`健康检查无法解析目标 Prefab UUID: ${targetUrl}`);
+			Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
+			setTimeout(() => {
+				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
+					if (probeErr) return done(probeErr);
+					if (!probeResult || probeResult.healthy !== true) {
+						return done(`Creator 无法正常重新打开目标 Prefab: ${JSON.stringify(probeResult || {})}`);
+					}
+					done(null, probeResult);
+				});
+			}, openDelayMs);
+		};
+
+		const openTargetAndCheck = (done) => {
+			openTargetAndProbe((probeErr, probeResult) => {
+				if (probeErr) return done(probeErr);
+				CommandQueue.callSceneScriptWithTimeout(
+						"mcp-bridge",
+						"validate-ui-blueprint",
+						{ blueprint, requirePrefabMode: true },
+						(validationErr, validationResult) => {
+							if (validationErr) return done(validationErr);
+							if (!validationResult || validationResult.valid !== true) {
+								return done(`重新打开后的 Prefab 语义校验失败: ${JSON.stringify(validationResult || {})}`);
+							}
+							done(null, { ...probeResult, validation: validationResult });
+						},
+					);
+			});
+		};
+
+		const rollbackSavedTarget = (reason, partialResult) => {
+			const complete = (rollback) => finish(null, {
+				...partialResult,
+				success: false,
+				health: { creatorResponsive: true, prefabReopened: false, error: String(reason) },
+				rollback,
+			});
+			const restore = () => {
+				if (!targetExists) {
+					if (!Editor.assetdb.exists(targetUrl)) return complete({ attempted: true, restored: true, action: "new-prefab-absent" });
+					return Editor.assetdb.delete([targetUrl], (deleteErr) => complete({
+						attempted: true,
+						restored: !deleteErr && !Editor.assetdb.exists(targetUrl),
+						action: "delete-invalid-new-prefab",
+						error: deleteErr ? String(deleteErr.message || deleteErr) : undefined,
+					}));
+				}
+				Editor.assetdb.saveExists(targetUrl, originalPrefabSource, (restoreErr) => {
+					if (restoreErr) {
+						return complete({ attempted: true, restored: false, action: "restore-existing-prefab", error: String(restoreErr.message || restoreErr) });
+					}
+					Editor.assetdb.refresh(targetUrl, (refreshErr) => {
+						if (refreshErr) {
+							return complete({ attempted: true, restored: false, action: "restore-existing-prefab", error: String(refreshErr.message || refreshErr) });
+						}
+						setTimeout(() => openTargetAndProbe((probeErr, probeResult) => complete({
+							attempted: true,
+							restored: !probeErr && !!probeResult && probeResult.healthy === true,
+							action: "restore-existing-prefab",
+							probe: probeResult,
+							error: probeErr ? String(probeErr) : undefined,
+						})), 500);
+					});
+				});
+			};
+			closeCurrentPrefab(() => restore());
+		};
+
+		const verifySavedTarget = (partialResult, currentlyInPrefab) => {
+			const openAndVerify = () => openTargetAndCheck((healthErr, healthResult) => {
+				if (healthErr) return rollbackSavedTarget(healthErr, partialResult);
+				const successResult = {
+					...partialResult,
+					success: true,
+					health: { creatorResponsive: true, prefabReopened: true, ...healthResult },
+				};
+				if (!closeAfterSave) return finish(null, successResult);
+				closeCurrentPrefab((closeErr) => {
+					if (closeErr) return rollbackSavedTarget(closeErr, partialResult);
+					finish(null, { ...successResult, health: { ...successResult.health, closedAfterCheck: true } });
+				});
+			});
+			if (!currentlyInPrefab) return openAndVerify();
+			closeCurrentPrefab((closeErr) => {
+				if (closeErr) return rollbackSavedTarget(closeErr, partialResult);
+				setTimeout(openAndVerify, 500);
+			});
+		};
+
+		const validateApplied = (applyResult, done) => {
+			CommandQueue.callSceneScriptWithTimeout(
+				"mcp-bridge",
+				"validate-ui-blueprint",
+				{ blueprint, rootId: applyResult && applyResult.rootUuid },
+				(err, validationResult) => {
+					if (err) return done(err);
+					if (!validationResult || validationResult.valid !== true) {
+						return done(null, {
+							mode: targetExists ? "update" : "create",
+							target: targetUrl,
+							applied: applyResult,
+							validation: validationResult,
+							saved: false,
+						});
+					}
+					done(null, null, validationResult);
+				},
+			);
+		};
+
+		const applyToCurrentScene = (createRoot) => {
+			CommandQueue.callSceneScriptWithTimeout(
+				"mcp-bridge",
+				"apply-ui-blueprint",
+				{ blueprint, createRoot },
+				(err, applyResult) => {
+					if (err) {
+						if (!createRoot) return closeCurrentPrefab(() => finish(err, null));
+						return finish(err, null);
+					}
+					validateApplied(applyResult, (validationErr, earlyResult, validationResult) => {
+						if (validationErr) {
+							if (!createRoot) return closeCurrentPrefab(() => finish(validationErr, null));
+							return finish(validationErr, null);
+						}
+						if (earlyResult) {
+							if (createRoot && applyResult && applyResult.rootUuid) {
+								CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "delete-node", { uuid: applyResult.rootUuid }, () => finish(null, { ...earlyResult, success: false, diskUnchanged: true }));
+							} else {
+								closeCurrentPrefab(() => finish(null, { ...earlyResult, success: false, diskUnchanged: true }));
+							}
+							return;
+						}
+
+						if (createRoot) {
+							ToolDispatcher._createPrefabViaSceneScript(
+								applyResult.rootUuid,
+								targetUrl,
+								blueprint.root.name || blueprint.root.id,
+								(createErr, createResult) => {
+									CommandQueue.callSceneScriptWithTimeout(
+										"mcp-bridge",
+										"delete-node",
+										{ uuid: applyResult.rootUuid },
+										() => {
+											if (createErr) {
+												return rollbackSavedTarget(createErr, {
+													mode: "create",
+													target: targetUrl,
+													saved: Editor.assetdb.exists(targetUrl),
+												});
+											}
+											verifySavedTarget({
+												mode: "create",
+												target: targetUrl,
+												applied: applyResult,
+												validation: validationResult,
+												saved: true,
+												result: createResult,
+											}, false);
+										},
+									);
+								},
+							);
+							return;
+						}
+
+						if (!save) {
+							return finish(null, {
+								success: true,
+								mode: "update",
+								target: targetUrl,
+								applied: applyResult,
+								validation: validationResult,
+								saved: false,
+								diskUnchanged: true,
+							});
+						}
+
+						CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "save-prefab", {}, (saveErr, saveResult) => {
+							if (saveErr) {
+								return rollbackSavedTarget(saveErr, {
+									mode: "update",
+									target: targetUrl,
+									applied: applyResult,
+									validation: validationResult,
+									saved: false,
+								});
+							}
+							const result = {
+								mode: "update",
+								target: targetUrl,
+								applied: applyResult,
+								validation: validationResult,
+								saved: true,
+								result: saveResult,
+							};
+							verifySavedTarget(result, true);
+						});
+					});
+				},
+			);
+		};
+
+		if (!targetExists) {
+			applyToCurrentScene(true);
+			return;
+		}
+		const prefabUuid = Editor.assetdb.urlToUuid(targetUrl);
+		if (!prefabUuid) {
+			return finish(`无法解析目标 Prefab UUID: ${targetUrl}`, null);
+		}
+		Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
+		setTimeout(() => {
+			CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
+				if (probeErr) return finish(`目标 Prefab 打开检查失败，未执行修改: ${probeErr}`, null);
+				if (!probeResult || probeResult.healthy !== true) {
+					return finish(`目标 Prefab 无法正常进入编辑模式，未执行修改: ${JSON.stringify(probeResult || {})}`, null);
+				}
+				applyToCurrentScene(false);
+			});
+		}, openDelayMs);
 	}
 
 	/**

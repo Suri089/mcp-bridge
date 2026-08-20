@@ -23,6 +23,301 @@ const findNode = (id) => {
     return node;
 };
 
+/** 获取 Cocos 内置或项目自定义组件类。 */
+const getBlueprintComponentClass = (type) => {
+    if (!type || typeof type !== "string") return null;
+    if (type.startsWith("cc.")) return cc[type.slice(3)] || null;
+    return cc.js.getClassByName(type) || cc[type] || null;
+};
+
+/** 确保节点挂载指定组件。 */
+const ensureBlueprintComponent = (node, type) => {
+    const componentClass = getBlueprintComponentClass(type);
+    if (!componentClass || !cc.js.isChildClassOf(componentClass, cc.Component)) {
+        throw new Error(`找不到合法组件类型: ${type}`);
+    }
+    return node.getComponent(componentClass) || node.addComponent(componentClass);
+};
+
+/** 按蓝图应用节点基础属性。 */
+const applyBlueprintTransform = (node, spec) => {
+    const transform = spec.transform || {};
+    if (spec.active !== undefined) node.active = !!spec.active;
+    if (transform.x !== undefined) node.x = Number(transform.x);
+    if (transform.y !== undefined) node.y = Number(transform.y);
+    if (transform.width !== undefined) node.width = Number(transform.width);
+    if (transform.height !== undefined) node.height = Number(transform.height);
+    if (transform.anchorX !== undefined) node.anchorX = Number(transform.anchorX);
+    if (transform.anchorY !== undefined) node.anchorY = Number(transform.anchorY);
+    if (transform.scaleX !== undefined) node.scaleX = Number(transform.scaleX);
+    if (transform.scaleY !== undefined) node.scaleY = Number(transform.scaleY);
+    if (transform.angle !== undefined) node.angle = Number(transform.angle);
+    if (transform.opacity !== undefined) node.opacity = Number(transform.opacity);
+    if (transform.color !== undefined) node.color = new cc.Color().fromHEX(String(transform.color));
+};
+
+/** 应用 Widget 快捷布局或完整属性。 */
+const applyBlueprintWidget = (node, layout) => {
+    if (!layout) return null;
+    const widget = ensureBlueprintComponent(node, "cc.Widget");
+    widget.alignMode = cc.Widget.AlignMode.ONCE;
+    const presets = {
+        center: { isAlignHorizontalCenter: true, isAlignVerticalCenter: true, horizontalCenter: 0, verticalCenter: 0 },
+        full: { isAlignTop: true, isAlignBottom: true, isAlignLeft: true, isAlignRight: true, top: 0, bottom: 0, left: 0, right: 0 },
+        top: { isAlignTop: true, isAlignHorizontalCenter: true, top: 0, horizontalCenter: 0 },
+        bottom: { isAlignBottom: true, isAlignHorizontalCenter: true, bottom: 0, horizontalCenter: 0 },
+        left: { isAlignLeft: true, isAlignVerticalCenter: true, left: 0, verticalCenter: 0 },
+        right: { isAlignRight: true, isAlignVerticalCenter: true, right: 0, verticalCenter: 0 },
+        "top-left": { isAlignTop: true, isAlignLeft: true, top: 0, left: 0 },
+        "top-right": { isAlignTop: true, isAlignRight: true, top: 0, right: 0 },
+        "bottom-left": { isAlignBottom: true, isAlignLeft: true, bottom: 0, left: 0 },
+        "bottom-right": { isAlignBottom: true, isAlignRight: true, bottom: 0, right: 0 },
+    };
+    const properties = typeof layout === "string" ? presets[layout] : layout;
+    if (!properties) throw new Error(`未知 Widget 布局预设: ${layout}`);
+    Object.keys(properties).forEach((key) => {
+        if (key in widget) widget[key] = properties[key];
+    });
+    return widget;
+};
+
+/** 通过 db:// 路径加载资源，由 AssetDB 负责 UUID 映射。 */
+const loadBlueprintAsset = (url) => new Promise((resolve, reject) => {
+    try {
+        const remoteAssetDb = Editor && Editor.assetdb && Editor.assetdb.remote;
+        const uuid = remoteAssetDb && remoteAssetDb.urlToUuid ? remoteAssetDb.urlToUuid(url) : null;
+        if (!uuid) return reject(new Error(`无法解析资源路径: ${url}`));
+        cc.assetManager.loadAny(uuid, (err, asset) => {
+            if (err || !asset) return reject(new Error(`资源加载失败 ${url}: ${err || "empty asset"}`));
+            resolve(asset);
+        });
+    } catch (error) {
+        reject(error);
+    }
+});
+
+/** 解析蓝图属性中的节点、组件和资源引用。 */
+const resolveBlueprintValue = async (value, nodeMap) => {
+    if (Array.isArray(value)) {
+        const result = [];
+        for (const item of value) result.push(await resolveBlueprintValue(item, nodeMap));
+        return result;
+    }
+    if (!value || typeof value !== "object") return value;
+    if (typeof value.$node === "string") {
+        const node = nodeMap[value.$node];
+        if (!node) throw new Error(`找不到节点引用: ${value.$node}`);
+        return node;
+    }
+    if (value.$component && typeof value.$component.node === "string") {
+        const node = nodeMap[value.$component.node];
+        if (!node) throw new Error(`找不到组件节点引用: ${value.$component.node}`);
+        const componentClass = getBlueprintComponentClass(value.$component.type);
+        const component = componentClass && node.getComponent(componentClass);
+        if (!component) throw new Error(`节点 ${value.$component.node} 缺少组件 ${value.$component.type}`);
+        return component;
+    }
+    if (typeof value.$asset === "string") return loadBlueprintAsset(value.$asset);
+    const result = {};
+    for (const key of Object.keys(value)) result[key] = await resolveBlueprintValue(value[key], nodeMap);
+    return result;
+};
+
+/** 将普通 JSON 值转换成少量常见 Cocos 值对象。 */
+const normalizeBlueprintProperty = (currentValue, nextValue) => {
+    if (typeof nextValue === "string" && currentValue instanceof cc.Color) {
+        return new cc.Color().fromHEX(nextValue);
+    }
+    if (nextValue && typeof nextValue === "object" && currentValue instanceof cc.Size) {
+        return cc.size(Number(nextValue.width) || 0, Number(nextValue.height) || 0);
+    }
+    if (nextValue && typeof nextValue === "object" && currentValue instanceof cc.Vec2) {
+        return cc.v2(Number(nextValue.x) || 0, Number(nextValue.y) || 0);
+    }
+    return nextValue;
+};
+
+/** 在当前场景中批量创建或更新整份 UI 蓝图。 */
+const applyUiBlueprintToScene = async (blueprint, createRoot) => {
+    const scene = cc.director.getScene();
+    if (!scene) throw new Error("场景尚未准备好");
+    const rootSpec = blueprint.root;
+    const rootName = rootSpec.name || rootSpec.id;
+    let root = null;
+    if (!createRoot) {
+        const editMode = Editor.require("scene://edit-mode");
+        if (!editMode || !editMode.curMode || editMode.curMode().name !== "prefab") {
+            throw new Error("目标 Prefab 尚未进入编辑模式，已拒绝修改当前场景");
+        }
+        root = scene.children.find((child) => child.name === rootName || child.name === rootSpec.id) || null;
+        if (!root && scene.children.length === 1) root = scene.children[0];
+        if (!root) throw new Error(`当前 Prefab 中找不到根节点: ${rootName}`);
+    } else {
+        root = new cc.Node(rootName);
+    }
+
+    const nodeMap = {};
+    const workItems = [];
+    const summary = { createdNodes: createRoot ? 1 : 0, updatedNodes: createRoot ? 0 : 1, components: 0, assets: 0, events: 0, warnings: [] };
+
+    const ensureTypeComponents = (node, type) => {
+        if (type === "sprite") {
+            const sprite = ensureBlueprintComponent(node, "cc.Sprite");
+            sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+            summary.components++;
+        } else if (type === "label") {
+            ensureBlueprintComponent(node, "cc.Label");
+            summary.components++;
+        } else if (type === "button") {
+            const sprite = ensureBlueprintComponent(node, "cc.Sprite");
+            sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+            ensureBlueprintComponent(node, "cc.Button");
+            summary.components += 2;
+        } else if (type === "layout") {
+            ensureBlueprintComponent(node, "cc.Layout");
+            summary.components++;
+        }
+    };
+
+    const buildNodes = (spec, node, isRoot) => {
+        const nodeName = spec.name || spec.id;
+        node.name = nodeName;
+        nodeMap[spec.id] = node;
+        ensureTypeComponents(node, spec.type || (isRoot ? "page" : "node"));
+        applyBlueprintTransform(node, spec);
+        if (spec.layout) applyBlueprintWidget(node, spec.layout);
+        workItems.push({ spec, node });
+        const children = Array.isArray(spec.children) ? spec.children : [];
+        children.forEach((childSpec) => {
+            const childName = childSpec.name || childSpec.id;
+            let child = node.children.find((item) => item.name === childName || item.name === childSpec.id) || null;
+            if (!child) {
+                child = new cc.Node(childName);
+                child.parent = node;
+                summary.createdNodes++;
+            } else {
+                summary.updatedNodes++;
+            }
+            buildNodes(childSpec, child, false);
+        });
+    };
+
+    buildNodes(rootSpec, root, true);
+
+    for (const item of workItems) {
+        const spec = item.spec;
+        const node = item.node;
+        if (spec.asset) {
+            const sprite = ensureBlueprintComponent(node, "cc.Sprite");
+            const asset = await loadBlueprintAsset(spec.asset);
+            if (asset instanceof cc.SpriteFrame) sprite.spriteFrame = asset;
+            else if (asset instanceof cc.Texture2D) sprite.spriteFrame = new cc.SpriteFrame(asset);
+            else throw new Error(`节点 ${spec.id} 的 asset 不是 SpriteFrame/Texture2D: ${spec.asset}`);
+            summary.assets++;
+        }
+        const components = Array.isArray(spec.components) ? spec.components : [];
+        for (const componentSpec of components) {
+            const component = ensureBlueprintComponent(node, componentSpec.type);
+            summary.components++;
+            const properties = componentSpec.properties || {};
+            for (const key of Object.keys(properties)) {
+                if (!(key in component)) {
+                    summary.warnings.push(`组件 ${componentSpec.type} 不存在属性 ${key}`);
+                    continue;
+                }
+                const resolved = await resolveBlueprintValue(properties[key], nodeMap);
+                component[key] = normalizeBlueprintProperty(component[key], resolved);
+            }
+        }
+    }
+
+    for (const item of workItems) {
+        const events = Array.isArray(item.spec.events) ? item.spec.events : [];
+        for (const eventSpec of events) {
+            const sourceType = eventSpec.sourceComponent || "cc.Button";
+            const source = ensureBlueprintComponent(item.node, sourceType);
+            const property = eventSpec.property || "clickEvents";
+            if (!Array.isArray(source[property])) throw new Error(`${sourceType}.${property} 不是事件数组`);
+            const target = nodeMap[eventSpec.target || rootSpec.id];
+            if (!target) throw new Error(`事件目标不存在: ${eventSpec.target || rootSpec.id}`);
+            const handler = new cc.Component.EventHandler();
+            handler.target = target;
+            handler.component = eventSpec.component;
+            handler.handler = eventSpec.handler;
+            handler.customEventData = eventSpec.customEventData === undefined ? "" : String(eventSpec.customEventData);
+            const exists = source[property].some((item) => item && item.target === target && item.component === handler.component && item.handler === handler.handler && String(item.customEventData || "") === handler.customEventData);
+            if (!exists) {
+                source[property] = source[property].concat([handler]);
+                summary.events++;
+            }
+        }
+    }
+
+    if (!createRoot) {
+        Editor.Ipc.sendToMain("scene:dirty");
+        Editor.Ipc.sendToAll("scene:node-changed", { uuid: root.uuid });
+    }
+    return { ...summary, rootUuid: root.uuid, rootName: root.name };
+};
+
+/** 对当前节点树执行轻量语义校验。 */
+const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false) => {
+    const scene = cc.director.getScene();
+    const rootSpec = blueprint.root;
+    const rootName = rootSpec.name || rootSpec.id;
+    let root = rootId ? findNode(rootId) : null;
+    if (!root && scene) root = scene.children.find((child) => child.name === rootName || child.name === rootSpec.id) || null;
+    if (!root && scene && scene.children.length === 1) root = scene.children[0];
+    const errors = [];
+    let checkedNodes = 0;
+    let checkedComponents = 0;
+    if (requirePrefabMode) {
+        const editMode = Editor.require("scene://edit-mode");
+        if (!editMode || !editMode.curMode || editMode.curMode().name !== "prefab") {
+            return { valid: false, errors: ["目标 Prefab 未能重新进入编辑模式"], checkedNodes, checkedComponents };
+        }
+    }
+    if (!root) return { valid: false, errors: [`找不到蓝图根节点: ${rootName}`], checkedNodes, checkedComponents };
+
+    const requiredTypeComponents = {
+        sprite: ["cc.Sprite"],
+        label: ["cc.Label"],
+        button: ["cc.Sprite", "cc.Button"],
+        layout: ["cc.Layout"],
+    };
+    const visit = (spec, node) => {
+        checkedNodes++;
+        const required = (requiredTypeComponents[spec.type] || []).concat((spec.components || []).map((item) => item.type));
+        required.forEach((type) => {
+            checkedComponents++;
+            const componentClass = getBlueprintComponentClass(type);
+            if (!componentClass || !node.getComponent(componentClass)) errors.push(`节点 ${spec.id} 缺少组件 ${type}`);
+        });
+        if (spec.asset) {
+            const sprite = node.getComponent(cc.Sprite);
+            if (!sprite || !sprite.spriteFrame) errors.push(`节点 ${spec.id} 缺少 SpriteFrame 资源`);
+        }
+        (spec.components || []).forEach((componentSpec) => {
+            const componentClass = getBlueprintComponentClass(componentSpec.type);
+            const component = componentClass && node.getComponent(componentClass);
+            if (!component) return;
+            Object.keys(componentSpec.properties || {}).forEach((key) => {
+                const expected = componentSpec.properties[key];
+                if (expected && expected.$asset && !component[key]) errors.push(`节点 ${spec.id} 的 ${componentSpec.type}.${key} 资源未绑定`);
+                if (expected && expected.$node && !component[key]) errors.push(`节点 ${spec.id} 的 ${componentSpec.type}.${key} 节点未绑定`);
+            });
+        });
+        (spec.children || []).forEach((childSpec) => {
+            const childName = childSpec.name || childSpec.id;
+            const child = node.children.find((item) => item.name === childName || item.name === childSpec.id);
+            if (!child) errors.push(`节点 ${spec.id} 缺少子节点 ${childSpec.id}`);
+            else visit(childSpec, child);
+        });
+    };
+    visit(rootSpec, root);
+    return { valid: errors.length === 0, errors: errors.slice(0, 50), checkedNodes, checkedComponents, rootUuid: root.uuid };
+};
+
 export = {
     /**
      * 修改节点的基础属性
@@ -1301,7 +1596,7 @@ export = {
         if (node) {
             const parent = node.parent;
             node.destroy();
-            Editor.Ipc.sendToMain("scene:dirty");
+            if (parent) Editor.Ipc.sendToMain("scene:dirty");
             // 延迟通知以确保节点已被移除
             setTimeout(() => {
                 if (parent) {
@@ -1535,6 +1830,52 @@ export = {
             default:
                 if (event.reply) event.reply(new Error(`未知的动画操作类型: ${action}`));
                 break;
+        }
+    },
+
+    /** 一次性创建或更新整份 UI 蓝图。 */
+    "apply-ui-blueprint": function (event, args) {
+        const blueprint = args && args.blueprint;
+        if (!blueprint || !blueprint.root) {
+            if (event.reply) event.reply(new Error("缺少有效 UI 蓝图"));
+            return;
+        }
+        applyUiBlueprintToScene(blueprint, args.createRoot === true)
+            .then((result) => {
+                if (event.reply) event.reply(null, result);
+            })
+            .catch((error) => {
+                if (event.reply) event.reply(new Error(`应用 UI 蓝图失败: ${error.message}`));
+            });
+    },
+
+    /** 校验当前 Prefab/场景是否满足 UI 蓝图。 */
+    "validate-ui-blueprint": function (event, args) {
+        try {
+            const result = validateUiBlueprintInScene(args.blueprint, args.rootId, args.requirePrefabMode === true);
+            if (event.reply) event.reply(null, result);
+        } catch (error) {
+            if (event.reply) event.reply(new Error(`校验 UI 蓝图失败: ${error.message}`));
+        }
+    },
+
+    /** 确认 Creator 仍可正常进入 Prefab 编辑模式并解析根节点。 */
+    "probe-prefab-health": function (event) {
+        try {
+            const editMode = Editor.require("scene://edit-mode");
+            const scene = cc.director.getScene();
+            const isPrefabMode = !!(editMode && editMode.curMode && editMode.curMode().name === "prefab");
+            const roots = scene ? scene.children.filter((child) => child && cc.isValid(child)) : [];
+            const healthy = isPrefabMode && roots.length > 0;
+            if (event.reply) event.reply(null, {
+                healthy,
+                mode: isPrefabMode ? "prefab" : "scene",
+                rootCount: roots.length,
+                rootName: roots[0] ? roots[0].name : "",
+                rootUuid: roots[0] ? roots[0].uuid : "",
+            });
+        } catch (error) {
+            if (event.reply) event.reply(new Error(`Prefab 健康检查失败: ${error.message}`));
         }
     },
 

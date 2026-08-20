@@ -63,7 +63,16 @@ async function run() {
     proxy.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const listed = await request('tools/list');
     const toolNames = listed.result.tools.map(tool => tool.name);
-    for (const requiredTool of ['get_active_instances', 'set_active_instance', 'get_scene_hierarchy', 'modify_prefab_offline']) {
+    for (const requiredTool of [
+        'get_active_instances',
+        'set_active_instance',
+        'get_scene_hierarchy',
+        'modify_prefab_offline',
+        'scan_ui_assets',
+        'dry_run_ui_blueprint',
+        'apply_ui_blueprint',
+        'validate_ui_blueprint'
+    ]) {
         assert(toolNames.includes(requiredTool), `Missing tool: ${requiredTool}`);
     }
     assert(new Set(toolNames).size === toolNames.length, 'tools/list contains duplicate tool names');

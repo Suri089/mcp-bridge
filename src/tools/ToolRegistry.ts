@@ -4,6 +4,54 @@ export const getToolsList = () => {
 		"【AI 安全守则】: 1. 执行任何写操作前必须先通过 get_scene_hierarchy 或 manage_components(get) 验证主体存在。 2. 严禁基于假设盲目猜测属性名。 3. 资源属性（如 cc.Prefab）必须通过 UUID 进行赋值。 4. 严禁频繁刷新全局资源 (refresh_editor)，必须通过 properties.path 指定具体修改的文件或目录以防止编辑器长期卡死。";
 	return [
 		{
+			name: "scan_ui_assets",
+			description: "按关键词一次性盘点项目内可复用的 Prefab、场景、图片、图集、字体和 TypeScript 文件。仅返回轻量路径索引，不读取完整资源内容。",
+			inputSchema: {
+				type: "object",
+				properties: {
+					keywords: { type: "array", items: { type: "string" }, description: "界面、模块或资源关键词" },
+					searchPaths: { type: "array", items: { type: "string" }, description: "项目相对搜索目录，默认 assets" },
+					limit: { type: "number", description: "最多返回条目数，默认 80，最大 200" },
+				},
+			},
+		},
+		{
+			name: "dry_run_ui_blueprint",
+			description: "读取项目内 ui-blueprint.json，校验结构、资源路径与目标 Prefab，并返回精简变更摘要；不会修改 Creator。",
+			inputSchema: {
+				type: "object",
+				properties: {
+					blueprintPath: { type: "string", description: "项目相对路径或 db:// 路径" },
+				},
+				required: ["blueprintPath"],
+			},
+		},
+		{
+			name: "apply_ui_blueprint",
+			description: "将整份 ui-blueprint.json 作为一个事务应用。保存前语义校验，保存后强制关闭、重新打开并再次校验；失败时拒绝成功并回滚已有 Prefab，或移除无效的新 Prefab。",
+			inputSchema: {
+				type: "object",
+				properties: {
+					blueprintPath: { type: "string", description: "项目相对路径或 db:// 路径" },
+					save: { type: "boolean", default: true, description: "校验通过后是否保存" },
+					closeAfterSave: { type: "boolean", default: false, description: "更新现有 Prefab 后是否退出编辑模式" },
+					openDelayMs: { type: "number", default: 1800, description: "打开 Prefab 后等待场景就绪的毫秒数" },
+				},
+				required: ["blueprintPath"],
+			},
+		},
+		{
+			name: "validate_ui_blueprint",
+			description: "对当前已打开的 Prefab/场景执行蓝图语义校验，只返回缺失节点、组件和资源绑定错误。",
+			inputSchema: {
+				type: "object",
+				properties: {
+					blueprintPath: { type: "string", description: "项目相对路径或 db:// 路径" },
+				},
+				required: ["blueprintPath"],
+			},
+		},
+		{
 			name: "get_selected_node",
 			description: `获取当前编辑器中选中的节点 ID。建议获取后立即调用 get_scene_hierarchy 确认该节点是否仍存在于当前场景中。`,
 			inputSchema: { type: "object", properties: {} },
