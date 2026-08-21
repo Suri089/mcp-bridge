@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "target": {
+    "prefab": "db://assets/ui_generated/UiBlueprintUpdateOnlyMissing.prefab",
+    "mode": "update-only"
+  },
+  "root": {
+    "id": "UiBlueprintUpdateOnlyMissing",
+    "type": "page"
+  }
+}

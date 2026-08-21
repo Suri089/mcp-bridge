@@ -1,0 +1,11 @@
+{
+  "name": "cocos-ui-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cocos Creator 2.4 UI 蓝图校验与批处理客户端",
+  "scripts": {
+    "validate": "node cli.js validate packages/mcp-bridge/tools/cocos-ui-builder/examples/minimal.ui-blueprint.json",
+    "dry-run": "node cli.js dry-run packages/mcp-bridge/tools/cocos-ui-builder/examples/minimal.ui-blueprint.json",
+    "test": "node scripts/test.js"
+  }
+}

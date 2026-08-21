@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cocos-ui-builder.local/schema/ui-blueprint.schema.json",
+  "title": "Cocos Creator 2.4 UI Blueprint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "target", "root"],
+  "properties": {
+    "version": { "const": 1 },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefab"],
+      "properties": {
+        "prefab": { "type": "string", "pattern": "^db://assets/.+\\.prefab$" },
+        "mode": {
+          "type": "string",
+          "enum": ["update-or-create", "update-only", "create-only"],
+          "default": "update-or-create"
+        },
+        "template": { "type": "string" }
+      }
+    },
+    "managedRegions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "protectedRegions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "root": { "$ref": "#/definitions/node" }
+  },
+  "definitions": {
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 },
+        "anchorX": { "type": "number", "minimum": 0, "maximum": 1 },
+        "anchorY": { "type": "number", "minimum": 0, "maximum": 1 },
+        "scaleX": { "type": "number" },
+        "scaleY": { "type": "number" },
+        "angle": { "type": "number" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 255 },
+        "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" }
+      }
+    },
+    "reference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$asset"],
+          "properties": { "$asset": { "type": "string", "pattern": "^db://assets/" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$node"],
+          "properties": { "$node": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$component"],
+          "properties": {
+            "$component": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["node", "type"],
+              "properties": {
+                "node": { "type": "string", "minLength": 1 },
+                "type": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "properties": { "type": "object" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "handler"],
+      "properties": {
+        "sourceComponent": { "type": "string", "default": "cc.Button" },
+        "property": { "type": "string", "default": "clickEvents" },
+        "target": { "type": "string" },
+        "component": { "type": "string", "minLength": 1 },
+        "handler": { "type": "string", "minLength": 1 },
+        "customEventData": { "type": ["string", "number", "boolean"] }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": ["node", "page", "container", "sprite", "label", "button", "layout"],
+          "default": "node"
+        },
+        "active": { "type": "boolean" },
+        "transform": { "$ref": "#/definitions/transform" },
+        "layout": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["center", "full", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]
+            },
+            { "type": "object" }
+          ]
+        },
+        "asset": { "type": "string", "pattern": "^db://assets/" },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/component" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/event" }
+        },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/node" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "target": {
+    "prefab": "db://assets/ui_generated/UiBlueprintExample.prefab",
+    "mode": "update-or-create"
+  },
+  "managedRegions": ["UiBlueprintExample/content"],
+  "protectedRegions": [],
+  "root": {
+    "id": "UiBlueprintExample",
+    "type": "page",
+    "transform": {
+      "width": 750,
+      "height": 1334,
+      "anchorX": 0.5,
+      "anchorY": 0.5
+    },
+    "children": [
+      {
+        "id": "content",
+        "type": "container",
+        "layout": "full",
+        "children": [
+          {
+            "id": "title",
+            "type": "label",
+            "transform": {
+              "y": 480,
+              "width": 420,
+              "height": 60
+            },
+            "components": [
+              {
+                "type": "cc.Label",
+                "properties": {
+                  "string": "UI Blueprint",
+                  "fontSize": 36,
+                  "lineHeight": 44,
+                  "horizontalAlign": 1
+                }
+              }
+            ]
+          },
+          {
+            "id": "closeButton",
+            "type": "button",
+            "layout": {
+              "isAlignTop": true,
+              "isAlignRight": true,
+              "top": 24,
+              "right": 24
+            },
+            "transform": {
+              "width": 96,
+              "height": 64
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
