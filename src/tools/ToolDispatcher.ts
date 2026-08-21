@@ -852,7 +852,9 @@ export class ToolDispatcher {
 		}
 
 		const save = args.save !== false;
-		const closeAfterSave = args.closeAfterSave === true;
+		// 保存后默认返回普通场景。把目标 Prefab 长期留在编辑模式会让下一次事务
+		// 无法检查场景中的自动同步实例，并放大 Creator 2.4 的模式切换问题。
+		const closeAfterSave = args.closeAfterSave !== false;
 		const openDelayMs = Math.max(500, Math.min(Number(args.openDelayMs) || 1800, 10000));
 		ToolDispatcher.isSceneBusy = true;
 
@@ -1101,16 +1103,37 @@ export class ToolDispatcher {
 		if (!prefabUuid) {
 			return finish(`无法解析目标 Prefab UUID: ${targetUrl}`, null);
 		}
-		Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
-		setTimeout(() => {
-			CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
-				if (probeErr) return finish(`目标 Prefab 打开检查失败，未执行修改: ${probeErr}`, null);
-				if (!probeResult || probeResult.healthy !== true) {
-					return finish(`目标 Prefab 无法正常进入编辑模式，未执行修改: ${JSON.stringify(probeResult || {})}`, null);
+		CommandQueue.callSceneScriptWithTimeout(
+			"mcp-bridge",
+			"inspect-auto-sync-prefab-instances",
+			{ prefabUuid },
+			(preflightErr, preflightResult) => {
+				if (preflightErr || !preflightResult || preflightResult.safe !== true) {
+					return finish(null, {
+						success: false,
+						mode: "update",
+						target: targetUrl,
+						saved: false,
+						diskUnchanged: true,
+						preflight: preflightErr
+							? { safe: false, reason: String(preflightErr), instances: [] }
+							: preflightResult,
+						rollback: { attempted: false, restored: true, action: "no-write-preflight-rejection" },
+					});
 				}
-				applyToCurrentScene(false);
-			});
-		}, openDelayMs);
+
+				Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
+				setTimeout(() => {
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
+						if (probeErr) return finish(`目标 Prefab 打开检查失败，未执行修改: ${probeErr}`, null);
+						if (!probeResult || probeResult.healthy !== true) {
+							return finish(`目标 Prefab 无法正常进入编辑模式，未执行修改: ${JSON.stringify(probeResult || {})}`, null);
+						}
+						applyToCurrentScene(false);
+					});
+				}, openDelayMs);
+			},
+		);
 	}
 
 	/**

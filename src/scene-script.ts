@@ -1,6 +1,8 @@
 
 "use strict";
 
+import { findAutoSyncPrefabInstances } from "./utils/PrefabSyncGuard";
+
 /**
  * 新建 Prefab 时蓝图根节点故意不挂到当前场景，避免污染或标脏用户正在编辑的
  * 场景。Cocos 2.4 的 `cc.engine.getInstanceById` 不保证能找到这种 detached
@@ -1897,6 +1899,66 @@ export = {
             });
         } catch (error) {
             if (event.reply) event.reply(new Error(`Prefab 健康检查失败: ${error.message}`));
+        }
+    },
+
+    /**
+     * 在打开目标 Prefab 前检查当前普通场景是否保存了同资源的自动同步实例。
+     *
+     * Creator 2.4 在 Prefab 保存或退出编辑模式时会要求用户决定“应用/退回”。
+     * 自动化事务不能替用户做这个有损选择，因此这里必须在任何写操作之前拒绝：
+     * 既避免阻塞 `save-prefab` 回调，也不会用过期场景实例覆盖蓝图刚生成的资源。
+     */
+    "inspect-auto-sync-prefab-instances": function (event, args) {
+        try {
+            const prefabUuid = args && args.prefabUuid;
+            if (!prefabUuid || typeof prefabUuid !== "string") {
+                if (event.reply) event.reply(new Error("缺少目标 Prefab UUID"));
+                return;
+            }
+
+            const editMode = Editor.require("scene://edit-mode");
+            const mode = editMode && editMode.curMode ? editMode.curMode().name : "unknown";
+            if (mode !== "scene") {
+                if (event.reply) event.reply(null, {
+                    safe: false,
+                    mode,
+                    reason: "current-edit-mode-is-not-scene",
+                    instances: [],
+                });
+                return;
+            }
+
+            const scene = cc.director.getScene();
+            if (!scene) {
+                if (event.reply) event.reply(null, {
+                    safe: false,
+                    mode,
+                    reason: "scene-not-ready",
+                    instances: [],
+                });
+                return;
+            }
+
+            // Creator 可能在场景内保存压缩或非压缩 UUID。统一解压后比较，失败时
+            // 保留原值；预检宁可明确报告未知上下文，也不能改写任何资源来“修复”。
+            const normalizeUuid = (uuid) => {
+                try {
+                    const uuidUtils = Editor.Utils && Editor.Utils.UuidUtils;
+                    return uuidUtils && uuidUtils.decompressUuid ? uuidUtils.decompressUuid(uuid) : uuid;
+                } catch (_error) {
+                    return uuid;
+                }
+            };
+            const instances = findAutoSyncPrefabInstances(scene, prefabUuid, normalizeUuid);
+            if (event.reply) event.reply(null, {
+                safe: instances.length === 0,
+                mode,
+                reason: instances.length > 0 ? "target-prefab-has-auto-sync-scene-instance" : "safe",
+                instances,
+            });
+        } catch (error) {
+            if (event.reply) event.reply(new Error(`Prefab 自动同步预检失败: ${error.message}`));
         }
     },
 

@@ -28,13 +28,13 @@ export const getToolsList = () => {
 		},
 		{
 			name: "apply_ui_blueprint",
-			description: "将整份 ui-blueprint.json 作为一个事务应用。保存前语义校验，保存后强制关闭、重新打开并再次校验；失败时拒绝成功并回滚已有 Prefab，或移除无效的新 Prefab。",
+			description: "将整份 ui-blueprint.json 作为一个事务应用。写入前拒绝当前场景中的目标自动同步实例，保存后强制关闭、重新打开并再次校验；失败时拒绝成功并回滚已有 Prefab，或移除无效的新 Prefab。",
 			inputSchema: {
 				type: "object",
 				properties: {
 					blueprintPath: { type: "string", description: "项目相对路径或 db:// 路径" },
 					save: { type: "boolean", default: true, description: "校验通过后是否保存" },
-					closeAfterSave: { type: "boolean", default: false, description: "更新现有 Prefab 后是否退出编辑模式" },
+					closeAfterSave: { type: "boolean", default: true, description: "更新现有 Prefab 后是否退出编辑模式；默认返回普通场景以保留下次安全预检能力" },
 					openDelayMs: { type: "number", default: 1800, description: "打开 Prefab 后等待场景就绪的毫秒数" },
 				},
 				required: ["blueprintPath"],

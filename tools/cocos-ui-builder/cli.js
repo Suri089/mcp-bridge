@@ -176,7 +176,7 @@ async function main(argv = process.argv.slice(2)) {
     const command = argv[0];
     const { positional, options } = parseOptions(argv.slice(1));
     if (!command || command === 'help' || options.help) {
-        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>]\n');
+        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>] [--keep-open]\n');
         return;
     }
     const projectRoot = resolveProjectRoot(options.project);
@@ -222,7 +222,9 @@ async function main(argv = process.argv.slice(2)) {
             result = await callTool(port, 'apply_ui_blueprint', {
                 blueprintPath: positional[0],
                 save: options['no-save'] !== true,
-                closeAfterSave: options.close === true,
+                // 默认返回普通场景，让下一次事务能在写入前检查自动同步实例。
+                // `--keep-open` 只用于明确需要继续人工检查 Prefab 的诊断场景。
+                closeAfterSave: options['keep-open'] !== true,
             });
         } catch (error) {
             const externalRecovery = recoverFromExternalBackup(transaction);

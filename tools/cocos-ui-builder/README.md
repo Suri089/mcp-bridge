@@ -174,6 +174,11 @@ node packages/mcp-bridge/tools/cocos-ui-builder/cli.js apply path/to/ui-blueprin
 node packages/mcp-bridge/tools/cocos-ui-builder/cli.js apply path/to/ui-blueprint.json --port 8200
 ```
 
+`apply` 默认在保存、重开和语义校验后返回普通场景，以便下一次事务先检查目标
+Prefab 是否在当前场景中存在自动同步实例。仅在明确需要停留于 Prefab 编辑模式做
+人工诊断时使用 `--keep-open`；若预检发现自动同步实例，事务会在写入前拒绝，避免
+Creator 2.4 弹出“应用/退回”并阻塞自动保存。
+
 不要绕过 CLI 直接调用 MCP 的 `apply_ui_blueprint`。Creator 内部回滚由 MCP Bridge 完成，而 Creator 进程异常退出时的项目外恢复由 CLI 完成。
 
 ## 7. 蓝图最小示例
