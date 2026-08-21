@@ -1002,7 +1002,28 @@ export class ToolDispatcher {
 							return;
 						}
 
-						if (createRoot) {
+					if (createRoot) {
+						// `--no-save` 在新建目标上也必须保证磁盘不变。此前新建分支会
+						// 无视 save=false 继续创建 Prefab，破坏 CLI 的诊断契约。
+						if (!save) {
+							return CommandQueue.callSceneScriptWithTimeout(
+								"mcp-bridge",
+								"delete-node",
+								{ uuid: applyResult.rootUuid },
+								(deleteErr) => {
+									if (deleteErr) return finish(`清理未保存的新建蓝图节点失败: ${deleteErr}`, null);
+									finish(null, {
+										success: true,
+										mode: "create",
+										target: targetUrl,
+										applied: applyResult,
+										validation: validationResult,
+										saved: false,
+										diskUnchanged: !Editor.assetdb.exists(targetUrl),
+									});
+								},
+							);
+						}
 							ToolDispatcher._createPrefabViaSceneScript(
 								applyResult.rootUuid,
 								targetUrl,

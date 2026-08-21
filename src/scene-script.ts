@@ -2,6 +2,14 @@
 "use strict";
 
 /**
+ * 新建 Prefab 时蓝图根节点故意不挂到当前场景，避免污染或标脏用户正在编辑的
+ * 场景。Cocos 2.4 的 `cc.engine.getInstanceById` 不保证能找到这种 detached
+ * 节点，因此用事务期注册表让后续“保存前校验 / 序列化 / 清理”仍能按 UUID
+ * 获取同一个对象。注册项必须在删除或异常路径中释放。
+ */
+const transientBlueprintRoots = new Map();
+
+/**
  * 更加健壮的节点查找函数，支持解压后的 UUID
  * @param {string} id 节点的 UUID (支持 22 位压缩格式)
  * @returns {cc.Node | null} 找到的节点对象或 null
@@ -20,6 +28,7 @@ const findNode = (id) => {
             // 忽略转换错误
         }
     }
+    if (!node) node = transientBlueprintRoots.get(id) || null;
     return node;
 };
 
@@ -143,6 +152,8 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
     if (!scene) throw new Error("场景尚未准备好");
     const rootSpec = blueprint.root;
     const rootName = rootSpec.name || rootSpec.id;
+    let transientRoot = null;
+    try {
     let root = null;
     if (!createRoot) {
         const editMode = Editor.require("scene://edit-mode");
@@ -154,6 +165,8 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
         if (!root) throw new Error(`当前 Prefab 中找不到根节点: ${rootName}`);
     } else {
         root = new cc.Node(rootName);
+        transientRoot = root;
+        transientBlueprintRoots.set(root.uuid, root);
     }
 
     const nodeMap = {};
@@ -258,6 +271,13 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
         Editor.Ipc.sendToAll("scene:node-changed", { uuid: root.uuid });
     }
     return { ...summary, rootUuid: root.uuid, rootName: root.name };
+    } catch (error) {
+        if (transientRoot) {
+            transientBlueprintRoots.delete(transientRoot.uuid);
+            if (cc.isValid(transientRoot)) transientRoot.destroy();
+        }
+        throw error;
+    }
 };
 
 /** 对当前节点树执行轻量语义校验。 */
@@ -1595,6 +1615,7 @@ export = {
         const node = findNode(uuid);
         if (node) {
             const parent = node.parent;
+            transientBlueprintRoots.delete(uuid);
             node.destroy();
             if (parent) Editor.Ipc.sendToMain("scene:dirty");
             // 延迟通知以确保节点已被移除
