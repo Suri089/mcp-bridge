@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
+const owningProjectPath = path.resolve(repoRoot, '..', '..');
 const proxyPath = path.join(repoRoot, 'dist', 'mcp-proxy.js');
 const packageInfo = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 
@@ -80,9 +81,24 @@ async function run() {
     const instancesResponse = await request('tools/call', { name: 'get_active_instances', arguments: {} });
     const instances = JSON.parse(instancesResponse.result.content[0].text);
     if (instances.length > 0) {
-        const selectedResponse = await request('tools/call', { name: 'set_active_instance', arguments: { port: instances[0].port } });
+        // 多项目并行时优先绑定承载当前 Bridge 仓库的 Creator，避免 smoke test
+        // 偶然验证另一项目的旧插件。若当前项目未启动，仍保留原有的通用代理检查。
+        const owningInstance = instances.find(instance => path.resolve(instance.projectPath).toLowerCase() === owningProjectPath.toLowerCase());
+        const selectedInstance = owningInstance || instances[0];
+        const selectedResponse = await request('tools/call', { name: 'set_active_instance', arguments: { port: selectedInstance.port } });
         const selected = JSON.parse(selectedResponse.result.content[0].text);
-        assert(selected.projectPath === instances[0].projectPath, 'Selected instance projectPath does not match');
+        assert(selected.projectPath === selectedInstance.projectPath, 'Selected instance projectPath does not match');
+
+        if (owningInstance) {
+            const dryRunResponse = await request('tools/call', {
+                name: 'dry_run_ui_blueprint',
+                arguments: { blueprintPath: 'packages/mcp-bridge/tools/cocos-ui-builder/examples/update-only-missing.ui-blueprint.json' }
+            });
+            assert(dryRunResponse.result && dryRunResponse.result.content, 'Live dry-run did not return MCP content');
+            const dryRun = JSON.parse(dryRunResponse.result.content[0].text);
+            assert(dryRun.valid === false, 'Live Creator did not reject the update-only missing target');
+            assert(dryRun.mode === 'update-only', 'Live Creator dry-run is missing the target mode contract');
+        }
     }
 
     const invalidSelection = await request('tools/call', { name: 'set_active_instance', arguments: { port: 65535 } });

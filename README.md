@@ -64,7 +64,13 @@
 ```bash
 npm install
 npm run build
+npm run test:mcp
 ```
+
+`build` 只负责生成 `dist/`；`test:mcp` 会验证同仓库 CLI 的 Schema/恢复契约、
+Bridge 的 UI Blueprint 单元契约、构建产物的 MCP 初始化、工具注册和当前在线
+Creator 实例。修改 Bridge 或随仓库交付的 CLI 后必须按这个顺序执行，两者都通过
+后再重启 Creator，避免编辑器继续加载未验证或陈旧的 dist。
 
 > **注意**: 构建使用 esbuild 并指定 `--target=es2018` 以确保兼容 Cocos Creator 2.4.x 内置的 Electron 9.x 运行时。
 
