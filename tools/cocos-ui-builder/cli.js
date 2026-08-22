@@ -12,6 +12,12 @@ const { dryRun, loadBlueprint, scanAssets, validateBlueprint } = require('./lib/
 // 使用时可通过 --project 显式覆盖，从而保持工具可移植。
 const bridgeRoot = path.resolve(__dirname, '..', '..');
 const defaultProjectRoot = path.resolve(bridgeRoot, '..', '..');
+const requiredBridgeTools = Object.freeze([
+    'scan_ui_assets',
+    'dry_run_ui_blueprint',
+    'validate_ui_blueprint',
+    'apply_ui_blueprint',
+]);
 
 function resolveProjectRoot(explicitPath) {
     if (explicitPath !== undefined && typeof explicitPath !== 'string') {
@@ -29,8 +35,8 @@ function resolveProjectRoot(explicitPath) {
     return rootPath;
 }
 
-function print(value) {
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+function print(value, compact = false) {
+    process.stdout.write(`${JSON.stringify(value, null, compact ? 0 : 2)}\n`);
 }
 
 function resolveTargetPrefabPath(blueprint, rootPath = defaultProjectRoot) {
@@ -172,49 +178,108 @@ async function callTool(port, name, args) {
     catch (_error) { return { message: text }; }
 }
 
+/**
+ * 在开始安全副本和 Creator 事务前确认活动编辑器实际加载了匹配的 Bridge dist。
+ * 这把“源码已构建、编辑器仍运行旧 dist”从模糊 Unknown tool 变成一次明确拒绝。
+ */
+function summarizeBridgeStatus(status, toolsResponse, expectedDistMtimeMs = null) {
+    const toolNames = new Set(
+        toolsResponse && Array.isArray(toolsResponse.tools)
+            ? toolsResponse.tools.map(tool => tool && tool.name).filter(Boolean)
+            : [],
+    );
+    const missingTools = requiredBridgeTools.filter(name => !toolNames.has(name));
+    const loadedDistMtimeMs = status && Number.isFinite(status.loadedDistMtimeMs)
+        ? Math.trunc(status.loadedDistMtimeMs)
+        : null;
+    const normalizedExpectedMtimeMs = Number.isFinite(expectedDistMtimeMs)
+        ? Math.trunc(expectedDistMtimeMs)
+        : null;
+    const versionVerified = normalizedExpectedMtimeMs === null
+        ? loadedDistMtimeMs !== null
+        : loadedDistMtimeMs === normalizedExpectedMtimeMs;
+    return {
+        ...status,
+        ready: missingTools.length === 0 && versionVerified,
+        versionVerified,
+        expectedDistMtimeMs: normalizedExpectedMtimeMs,
+        toolCount: toolNames.size,
+        requiredTools: requiredBridgeTools,
+        missingTools,
+    };
+}
+
+async function inspectBridge(port) {
+    const [status, toolsResponse] = await Promise.all([
+        requestJson(port, '/mcp-status'),
+        requestJson(port, '/list-tools'),
+    ]);
+    const localDistPath = path.join(bridgeRoot, 'dist', 'main.js');
+    const expectedDistMtimeMs = fs.existsSync(localDistPath)
+        ? Math.trunc(fs.statSync(localDistPath).mtimeMs)
+        : null;
+    return summarizeBridgeStatus(status, toolsResponse, expectedDistMtimeMs);
+}
+
 async function main(argv = process.argv.slice(2)) {
     const command = argv[0];
     const { positional, options } = parseOptions(argv.slice(1));
+    const emit = value => print(value, options.compact === true);
     if (!command || command === 'help' || options.help) {
-        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>] [--keep-open]\n');
+        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>] [--keep-open] [--compact]\n');
         return;
     }
     const projectRoot = resolveProjectRoot(options.project);
     if (command === 'scan') {
         const limit = Math.max(1, Math.min(Number(options.limit) || 80, 200));
-        print(scanAssets(projectRoot, positional, limit));
+        emit(scanAssets(projectRoot, positional, limit));
         return;
     }
     if (command === 'validate') {
         if (!positional[0]) throw new Error('validate 需要蓝图文件路径');
         const loaded = loadBlueprint(projectRoot, positional[0]);
         const result = validateBlueprint(loaded.blueprint);
-        print(result);
+        emit(result);
         if (!result.valid) process.exitCode = 1;
         return;
     }
     if (command === 'dry-run') {
         if (!positional[0]) throw new Error('dry-run 需要蓝图文件路径');
         const result = dryRun(projectRoot, positional[0]);
-        print(result);
+        emit(result);
         if (!result.valid || result.missingAssets.length > 0) process.exitCode = 1;
         return;
     }
     if (command === 'status') {
         const port = await discoverPort(options.port, projectRoot);
-        print(await requestJson(port, '/mcp-status'));
+        emit(await inspectBridge(port));
         return;
     }
     if (command === 'apply') {
         if (!positional[0]) throw new Error('apply 需要蓝图文件路径');
         const preflight = dryRun(projectRoot, positional[0]);
         if (!preflight.valid || preflight.missingAssets.length > 0) {
-            print(preflight);
+            emit(preflight);
             process.exitCode = 1;
             return;
         }
         // 只有纯文件预检完全通过后才探测 Creator，确保模式冲突不会触达编辑器。
         const port = await discoverPort(options.port, projectRoot);
+        const bridgeStatus = await inspectBridge(port);
+        if (!bridgeStatus.ready) {
+            emit({
+                success: false,
+                saved: false,
+                diskUnchanged: true,
+                failureStage: 'bridge-version-preflight',
+                bridge: bridgeStatus,
+                message: bridgeStatus.missingTools.length > 0
+                    ? '活动 Creator 缺少 UI Blueprint 必需工具；请重建 Bridge 并重启 Creator 后重试。'
+                    : '活动 Creator 仍加载旧 Bridge dist；请重启 Creator 后重试。',
+            });
+            process.exitCode = 1;
+            return;
+        }
         const loaded = loadBlueprint(projectRoot, positional[0]);
         const transaction = beginSafetyBackup(loaded.blueprint, projectRoot);
         let result;
@@ -235,12 +300,12 @@ async function main(argv = process.argv.slice(2)) {
             else {
                 result = { ...result, externalRecovery: recoverFromExternalBackup(transaction) };
             }
-            print(result);
+            emit(result);
             process.exitCode = 1;
             return;
         }
         clearSafetyBackup(transaction);
-        print(result);
+        emit(result);
         return;
     }
     throw new Error(`未知命令: ${command}`);
@@ -258,11 +323,14 @@ module.exports = {
     beginSafetyBackup,
     clearSafetyBackup,
     discoverPort,
+    inspectBridge,
     isApplyResultHealthy,
     main,
     parseOptions,
     recoverFromExternalBackup,
     requestJson,
+    requiredBridgeTools,
     resolveProjectRoot,
     resolveTargetPrefabPath,
+    summarizeBridgeStatus,
 };

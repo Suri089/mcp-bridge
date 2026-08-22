@@ -863,6 +863,22 @@ export class ToolDispatcher {
 			callback(err, result);
 		};
 
+		// 所有写入前拒绝统一返回机器可读阶段和无磁盘变化契约。CLI 因此可以
+		// 清理临时安全副本并直接给出诊断，不会把正常预检失败误报成回滚事故。
+		const rejectNoWrite = (failureStage: string, reason: any, details: Record<string, any> = {}) => finish(null, {
+			success: false,
+			mode: targetExists ? "update" : "create",
+			target: targetUrl,
+			saved: false,
+			diskUnchanged: true,
+			failureStage,
+			diagnostics: {
+				reason: String(reason),
+				...details,
+			},
+			rollback: { attempted: false, restored: true, action: "no-write-preflight-rejection" },
+		});
+
 		const closeCurrentPrefab = (done) => {
 			CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "close-prefab", {}, done);
 		};
@@ -1101,7 +1117,7 @@ export class ToolDispatcher {
 		}
 		const prefabUuid = Editor.assetdb.urlToUuid(targetUrl);
 		if (!prefabUuid) {
-			return finish(`无法解析目标 Prefab UUID: ${targetUrl}`, null);
+			return rejectNoWrite("prefab-uuid-preflight", `无法解析目标 Prefab UUID: ${targetUrl}`);
 		}
 		CommandQueue.callSceneScriptWithTimeout(
 			"mcp-bridge",
@@ -1109,25 +1125,29 @@ export class ToolDispatcher {
 			{ prefabUuid },
 			(preflightErr, preflightResult) => {
 				if (preflightErr || !preflightResult || preflightResult.safe !== true) {
-					return finish(null, {
-						success: false,
-						mode: "update",
-						target: targetUrl,
-						saved: false,
-						diskUnchanged: true,
-						preflight: preflightErr
-							? { safe: false, reason: String(preflightErr), instances: [] }
-							: preflightResult,
-						rollback: { attempted: false, restored: true, action: "no-write-preflight-rejection" },
-					});
+					const preflight = preflightErr
+						? { safe: false, reason: String(preflightErr), instances: [] }
+						: preflightResult;
+					return rejectNoWrite(
+						"scene-auto-sync-preflight",
+						preflight && preflight.reason ? preflight.reason : "场景自动同步预检失败",
+						{ preflight },
+					);
 				}
 
 				Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
 				setTimeout(() => {
 					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
-						if (probeErr) return finish(`目标 Prefab 打开检查失败，未执行修改: ${probeErr}`, null);
+						if (probeErr) {
+							return rejectNoWrite("prefab-deserialize-preflight", probeErr, {
+								likelyCauses: ["creator-script-compile-error", "component-constructor-error", "missing-prefab-dependency"],
+							});
+						}
 						if (!probeResult || probeResult.healthy !== true) {
-							return finish(`目标 Prefab 无法正常进入编辑模式，未执行修改: ${JSON.stringify(probeResult || {})}`, null);
+							return rejectNoWrite("prefab-deserialize-preflight", "目标 Prefab 无法正常进入编辑模式", {
+								probe: probeResult || {},
+								likelyCauses: ["creator-script-compile-error", "component-constructor-error", "missing-prefab-dependency"],
+							});
 						}
 						applyToCurrentScene(false);
 					});

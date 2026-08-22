@@ -10,9 +10,11 @@ const {
     clearSafetyBackup,
     defaultProjectRoot,
     isApplyResultHealthy,
+    requiredBridgeTools,
     recoverFromExternalBackup,
     requestJson,
     resolveProjectRoot,
+    summarizeBridgeStatus,
 } = require('../cli');
 const { dryRun, loadBlueprint, validateBlueprint } = require('../lib/blueprint');
 
@@ -150,8 +152,30 @@ async function run() {
     }
     assert.strictEqual(isApplyResultHealthy({ success: true, saved: false, diskUnchanged: true }), true);
 
+    const readyBridge = summarizeBridgeStatus(
+        { port: 8200, projectPath: projectRoot, loadedDistMtimeMs: 1234 },
+        { tools: requiredBridgeTools.map(name => ({ name })) },
+        1234,
+    );
+    assert.strictEqual(readyBridge.ready, true);
+    assert.deepStrictEqual(readyBridge.missingTools, []);
+    const staleBridge = summarizeBridgeStatus(
+        { port: 8200, projectPath: projectRoot, loadedDistMtimeMs: 1233 },
+        { tools: [{ name: 'get_scene_hierarchy' }] },
+        1234,
+    );
+    assert.strictEqual(staleBridge.ready, false);
+    assert(staleBridge.missingTools.includes('apply_ui_blueprint'));
+    const staleMatchingTools = summarizeBridgeStatus(
+        { port: 8200, projectPath: projectRoot, loadedDistMtimeMs: 1233 },
+        { tools: requiredBridgeTools.map(name => ({ name })) },
+        1234,
+    );
+    assert.strictEqual(staleMatchingTools.ready, false);
+    assert.strictEqual(staleMatchingTools.versionVerified, false);
+
     await expectDisconnectedRequest();
-    process.stdout.write('cocos-ui-builder tests passed: schema, modes, recovery, disconnect, health contract.\n');
+    process.stdout.write('cocos-ui-builder tests passed: schema, modes, recovery, disconnect, health and bridge-version contracts.\n');
 }
 
 run().catch(error => {

@@ -5,6 +5,18 @@ import { ToolDispatcher } from "../tools/ToolDispatcher";
 import { McpWrappers } from "./McpWrappers";
 import { HttpServer } from "./HttpServer";
 import { IpcManager } from "../IpcManager";
+const fs = require("fs");
+const bridgePackage = require("../../package.json");
+
+// 在模块加载时冻结 dist 时间戳，而不是每次 status 都读取磁盘。若源码重新构建但
+// Creator 尚未重启，这个值仍代表进程实际加载的旧 dist，CLI 可以可靠地快速失败。
+const loadedDistMtimeMs = (() => {
+	try {
+		return Math.trunc(fs.statSync(__filename).mtimeMs);
+	} catch (_error) {
+		return null;
+	}
+})();
 export class McpRouter {
 	public static handleRequest(req: any, res: any) {
 		const url = req.url;
@@ -24,7 +36,9 @@ export class McpRouter {
 				res.end(JSON.stringify({ 
 					port: HttpServer.config.port, 
 					projectName: require('path').basename(projectPath), 
-					projectPath: projectPath
+					projectPath: projectPath,
+					bridgeVersion: bridgePackage.version,
+					loadedDistMtimeMs,
 				}));
 			} catch (e) {
 				res.writeHead(500);

@@ -86,11 +86,17 @@ apply    = 真正落地，并验证 Creator 和 Prefab 仍然正常
 cd packages/mcp-bridge
 npm install
 npm run build
-npm run test:mcp
+npm run test:mcp:offline
 ```
 
-不要省略 `test:mcp`：`build` 只能证明代码可生成 dist，测试才会确认最终代理
-实际暴露了 UI Blueprint 工具并满足协议与健康契约。两者通过后再重启 Creator。
+不要省略 `test:mcp:offline`：`build` 只能证明代码可生成 dist，离线测试确认新
+代理包含 UI Blueprint 工具并满足协议与健康契约。通过后重启 Creator，再运行：
+
+```bash
+npm run test:mcp:online
+```
+
+这样在线 smoke 只检查 Creator 已加载的新 dist，不会在重启前被旧进程误导。
 
 `dist/` 和 `node_modules/` 不进入 Git，因此首次安装、切换版本或修改 MCP Bridge 源码后都需要重新构建。
 
@@ -131,7 +137,8 @@ AI 应按以下顺序执行：
 2. 检查同模块代码和现有 Prefab；功能优先模式只做一次有限扫描，未找到高匹配内容就使用基础节点。
 3. 先编写业务 TypeScript，并等待 Creator 导入和编译。
 4. 生成 `ui-blueprint.json`。
-5. 依次执行 `validate`、`dry-run`、`apply`。
+5. Creator 在线时直接执行一次 `apply`；它已经内置完整本地 dry-run。只有离线或
+   定位蓝图错误时才单独使用 `dry-run` / `validate`。
 6. 只在 `apply` 返回完整健康结果后标记完成。
 
 ## 6. 手动命令与排障
@@ -167,6 +174,9 @@ node packages/mcp-bridge/tools/cocos-ui-builder/cli.js dry-run path/to/ui-bluepr
 ```bash
 node packages/mcp-bridge/tools/cocos-ui-builder/cli.js apply path/to/ui-blueprint.json
 ```
+
+`apply` 在发现 Creator 前已经执行 Schema、引用、资源和目标模式预检。正常交付
+不需要先重复运行 `validate` 和 `dry-run`。使用 `--compact` 可减少 AI 工具输出。
 
 也可以指定 Creator 端口：
 
@@ -284,7 +294,9 @@ Creator 2.4 弹出“应用/退回”并阻塞自动保存。
 cd packages/mcp-bridge
 git switch -c feat/ui-blueprint-safe-apply
 npm run build
-npm run test:mcp
+npm run test:mcp:offline
+# 重启 Creator 后
+npm run test:mcp:online
 git add scripts/smoke-mcp.js src/scene-script.ts src/tools/ToolDispatcher.ts src/tools/ToolRegistry.ts src/utils/UiBlueprint.ts
 git commit -m "feat: add safe UI blueprint transactions"
 ```
@@ -323,7 +335,7 @@ git clone --branch <已验证分支或标签> <mcp-bridge仓库地址> packages/
 cd packages/mcp-bridge
 npm install
 npm run build
-npm run test:mcp
+npm run test:mcp:offline
 cd ../..
 ```
 
@@ -332,9 +344,9 @@ cd ../..
 1. 若 Codex 从 Cocos 项目根启动，配置 `cwd = "packages/mcp-bridge"`；若从包含 GameClient 的父仓库启动，配置 `cwd = "GameClient/packages/mcp-bridge"`。`command` 使用 `node`，`args` 使用 `["dist/mcp-proxy.js"]`，不要写旧项目的绝对路径。
 2. 重启目标项目的 Cocos Creator 2.4.x。
 3. 启动 MCP Bridge。
-4. 执行 `node packages/mcp-bridge/tools/cocos-ui-builder/cli.js status`，确认返回目标项目路径。
+4. 执行 `npm run test:mcp:online`，再用 `node packages/mcp-bridge/tools/cocos-ui-builder/cli.js status` 确认返回目标项目路径且 `ready:true`。
 5. 用目标项目内的路径生成一份测试蓝图。
-6. 依次执行 `validate`、`dry-run`、`apply`。
+6. 执行一次 `apply`；离线或排查 Schema 时才单独运行 `dry-run` / `validate`。
 7. 确认测试 Prefab 能自动关闭、重新打开并返回健康结果。
 8. 通过 Creator 的 AssetDB 删除测试资源，不要在文件系统直接删除 Prefab 或 `.meta`。
 
