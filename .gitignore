@@ -4,4 +4,5 @@
 **/specs
 **/settings.local.json
 **/test
-**/docs/superpowers
+**/docs/superpowers
+.omo
