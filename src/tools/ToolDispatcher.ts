@@ -888,7 +888,12 @@ export class ToolDispatcher {
 			if (!prefabUuid) return done(`健康检查无法解析目标 Prefab UUID: ${targetUrl}`);
 			Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
 			setTimeout(() => {
-				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", { expectedPrefabUuid: prefabUuid }, (probeErr, probeResult) => {
+				// Creator 2.4 新建 Prefab 首次导入时，根节点 `_prefab.asset` 可能仍指向
+				// 创建过程中的临时 Prefab 对象，其 UUID 与 AssetDB 最终 UUID 不同。
+				// 新建分支随后仍会执行完整 Blueprint 语义校验；现有资源更新继续严格
+				// 校验目标 UUID，防止误开其他 Prefab 后写入。
+				const expectedPrefabUuid = targetExists ? prefabUuid : "";
+				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", { expectedPrefabUuid }, (probeErr, probeResult) => {
 					if (probeErr) return done(probeErr);
 					if (!probeResult || probeResult.healthy !== true) {
 						return done(`Creator 无法正常重新打开目标 Prefab: ${JSON.stringify(probeResult || {})}`);
@@ -963,10 +968,20 @@ export class ToolDispatcher {
 					health: { creatorResponsive: true, prefabReopened: true, ...healthResult },
 				};
 				if (!closeAfterSave) return finish(null, successResult);
-				closeCurrentPrefab((closeErr) => {
+				const closeVerifiedPrefab = () => closeCurrentPrefab((closeErr) => {
 					if (closeErr) return rollbackSavedTarget(closeErr, partialResult);
 					finish(null, { ...successResult, health: { ...successResult.health, closedAfterCheck: true } });
 				});
+				// 新建 Prefab 首次导入后，Creator 2.4 可能会在编辑根节点上补齐内部
+				// 序列化状态，并把它标记为待应用的自动同步实例。先通过编辑模式正式
+				// 保存一次，清除该状态，再退出，避免弹出“应用/回退”对话框。
+				if (!targetExists) {
+					return CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "save-prefab", {}, (saveErr) => {
+						if (saveErr) return rollbackSavedTarget(saveErr, partialResult);
+						closeVerifiedPrefab();
+					});
+				}
+				closeVerifiedPrefab();
 			});
 			if (!currentlyInPrefab) return openAndVerify();
 			closeCurrentPrefab((closeErr) => {

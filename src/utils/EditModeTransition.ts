@@ -101,7 +101,8 @@ export async function exitPrefabModeToScene(
 		while (Date.now() - popStartedAt <= perPopTimeoutMs && Date.now() - startedAt <= totalTimeoutMs) {
 			await sleep(pollIntervalMs);
 			const next = editMode.curMode();
-			if (next !== current) {
+			const nextModeName = next && typeof next.name === "string" ? next.name : "unknown";
+			if (next !== current || nextModeName !== modeName) {
 				progressed = true;
 				break;
 			}

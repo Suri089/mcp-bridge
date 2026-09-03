@@ -50,6 +50,28 @@ async function testNestedPrefabExit() {
     assert.strictEqual(result.popCount, 2);
 }
 
+async function testMutableModeObjectExit() {
+    const mutableMode = { name: 'prefab' };
+    let popCount = 0;
+    const editMode = {
+        curMode: () => mutableMode,
+        pop: () => {
+            popCount++;
+            setTimeout(() => {
+                mutableMode.name = 'scene';
+            }, 5);
+        },
+    };
+    const result = await exitPrefabModeToScene(editMode, {
+        pollIntervalMs: 2,
+        perPopTimeoutMs: 100,
+        totalTimeoutMs: 300,
+    });
+    assert.strictEqual(result.mode, 'scene');
+    assert.strictEqual(result.popCount, 1);
+    assert.strictEqual(popCount, 1);
+}
+
 async function testBlockedDialogFailsWithoutRepeatedPop() {
     const prefabMode = { name: 'prefab' };
     let popCount = 0;
@@ -89,6 +111,7 @@ async function testStableSaveWait() {
 Promise.resolve()
     .then(testAsyncExit)
     .then(testNestedPrefabExit)
+    .then(testMutableModeObjectExit)
     .then(testBlockedDialogFailsWithoutRepeatedPop)
     .then(testStableSaveWait)
     .then(() => {

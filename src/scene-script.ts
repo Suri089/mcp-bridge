@@ -1680,16 +1680,28 @@ export = {
             transientBlueprintRoots.delete(uuid);
             node.destroy();
             if (parent) Editor.Ipc.sendToMain("scene:dirty");
-            // 延迟通知以确保节点已被移除
-            setTimeout(() => {
+            // destroy 会在本帧结束时真正移除节点。必须等节点脱离父级后再回复，
+            // 否则调用方立即切换 Prefab 时，Creator 会把残留的自动同步实例判为已修改。
+            const waitStartedAt = Date.now();
+            const replyAfterRemoved = () => {
+                const stillAttached = parent && parent.children && parent.children.indexOf(node) >= 0;
+                const stillDiscoverable = !!findNode(uuid);
+                if ((stillAttached || stillDiscoverable) && Date.now() - waitStartedAt < 3000) {
+                    setTimeout(replyAfterRemoved, 16);
+                    return;
+                }
+                if (stillAttached || stillDiscoverable) {
+                    if (event.reply) event.reply(new Error(`删除节点超时: ${uuid}`));
+                    return;
+                }
                 if (parent) {
                     Editor.Ipc.sendToAll("scene:node-changed", { uuid: parent.uuid });
                 }
                 // 广播节点删除事件
                 Editor.Ipc.sendToAll("scene:node-deleted", { uuid: uuid });
-            }, 10);
-
-            if (event.reply) event.reply(null, `节点 ${uuid} 已删除`);
+                if (event.reply) event.reply(null, `节点 ${uuid} 已删除`);
+            };
+            setTimeout(replyAfterRemoved, 16);
         } else {
             if (event.reply) event.reply(new Error(`找不到节点: ${uuid}`));
         }
@@ -1949,11 +1961,6 @@ export = {
             const scene = cc.director.getScene();
             const isPrefabMode = !!(editMode && editMode.curMode && editMode.curMode().name === "prefab");
             const roots = scene ? scene.children.filter((child) => child && cc.isValid(child)) : [];
-            const root = roots[0] || null;
-            const rootPrefabInfo = root ? (root as any)._prefab : null;
-            const actualPrefabUuid = rootPrefabInfo && rootPrefabInfo.asset
-                ? (rootPrefabInfo.asset._uuid || rootPrefabInfo.asset.uuid || "")
-                : "";
             const expectedPrefabUuid = args && typeof args.expectedPrefabUuid === "string"
                 ? args.expectedPrefabUuid
                 : "";
@@ -1965,8 +1972,20 @@ export = {
                     return uuid;
                 }
             };
+            const getPrefabUuid = (node) => {
+                const prefabInfo = node ? (node as any)._prefab : null;
+                return prefabInfo && prefabInfo.asset
+                    ? (prefabInfo.asset._uuid || prefabInfo.asset.uuid || "")
+                    : "";
+            };
+            const normalizedExpectedUuid = normalizeUuid(expectedPrefabUuid);
+            const root = roots.find((node) => {
+                const prefabUuid = getPrefabUuid(node);
+                return !!prefabUuid && (!expectedPrefabUuid || normalizeUuid(prefabUuid) === normalizedExpectedUuid);
+            }) || roots.find((node) => !!getPrefabUuid(node)) || null;
+            const actualPrefabUuid = getPrefabUuid(root);
             const targetMatches = !expectedPrefabUuid || (
-                !!actualPrefabUuid && normalizeUuid(actualPrefabUuid) === normalizeUuid(expectedPrefabUuid)
+                !!actualPrefabUuid && normalizeUuid(actualPrefabUuid) === normalizedExpectedUuid
             );
             const healthy = isPrefabMode && roots.length > 0 && targetMatches;
             if (event.reply) event.reply(null, {
