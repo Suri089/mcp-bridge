@@ -226,7 +226,7 @@ async function main(argv = process.argv.slice(2)) {
     const { positional, options } = parseOptions(argv.slice(1));
     const emit = value => print(value, options.compact === true);
     if (!command || command === 'help' || options.help) {
-        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>] [--keep-open] [--compact]\n');
+        process.stdout.write('用法: node cli.js <scan|validate|dry-run|apply|status> [参数] [--project <Cocos项目根目录>] [--keep-open] [--open-delay-ms <毫秒>] [--compact]\n');
         return;
     }
     const projectRoot = resolveProjectRoot(options.project);
@@ -282,11 +282,18 @@ async function main(argv = process.argv.slice(2)) {
         }
         const loaded = loadBlueprint(projectRoot, positional[0]);
         const transaction = beginSafetyBackup(loaded.blueprint, projectRoot);
+        const openDelayMs = options['open-delay-ms'] === undefined
+            ? undefined
+            : Number(options['open-delay-ms']);
+        if (openDelayMs !== undefined && !Number.isFinite(openDelayMs)) {
+            throw new Error('--open-delay-ms 需要有效的毫秒数');
+        }
         let result;
         try {
             result = await callTool(port, 'apply_ui_blueprint', {
                 blueprintPath: positional[0],
                 save: options['no-save'] !== true,
+                openDelayMs,
                 // 默认返回普通场景，让下一次事务能在写入前检查自动同步实例。
                 // `--keep-open` 只用于明确需要继续人工检查 Prefab 的诊断场景。
                 closeAfterSave: options['keep-open'] !== true,

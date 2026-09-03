@@ -888,7 +888,7 @@ export class ToolDispatcher {
 			if (!prefabUuid) return done(`健康检查无法解析目标 Prefab UUID: ${targetUrl}`);
 			Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
 			setTimeout(() => {
-				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
+				CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", { expectedPrefabUuid: prefabUuid }, (probeErr, probeResult) => {
 					if (probeErr) return done(probeErr);
 					if (!probeResult || probeResult.healthy !== true) {
 						return done(`Creator 无法正常重新打开目标 Prefab: ${JSON.stringify(probeResult || {})}`);
@@ -1137,7 +1137,7 @@ export class ToolDispatcher {
 
 				Editor.Ipc.sendToAll("scene:enter-prefab-edit-mode", prefabUuid);
 				setTimeout(() => {
-					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", {}, (probeErr, probeResult) => {
+					CommandQueue.callSceneScriptWithTimeout("mcp-bridge", "probe-prefab-health", { expectedPrefabUuid: prefabUuid }, (probeErr, probeResult) => {
 						if (probeErr) {
 							return rejectNoWrite("prefab-deserialize-preflight", probeErr, {
 								likelyCauses: ["creator-script-compile-error", "component-constructor-error", "missing-prefab-dependency"],

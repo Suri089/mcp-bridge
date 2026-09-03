@@ -2,6 +2,7 @@
 "use strict";
 
 import { findAutoSyncPrefabInstances } from "./utils/PrefabSyncGuard";
+import { exitPrefabModeToScene, waitForStableEditMode } from "./utils/EditModeTransition";
 
 /**
  * 新建 Prefab 时蓝图根节点故意不挂到当前场景，避免污染或标脏用户正在编辑的
@@ -48,6 +49,29 @@ const ensureBlueprintComponent = (node, type) => {
         throw new Error(`找不到合法组件类型: ${type}`);
     }
     return node.getComponent(componentClass) || node.addComponent(componentClass);
+};
+
+/** 创建可由 Creator 2.4 Inspector 稳定序列化的事件处理器。 */
+const createBlueprintEventHandler = (target, eventSpec) => {
+    const componentClass = getBlueprintComponentClass(eventSpec.component);
+    const targetComponent = componentClass && target.getComponent(componentClass);
+    if (!targetComponent) {
+        throw new Error(`事件目标节点 ${target.name} 缺少组件 ${eventSpec.component}`);
+    }
+    if (typeof targetComponent[eventSpec.handler] !== "function") {
+        throw new Error(`事件处理方法不存在: ${eventSpec.component}.${eventSpec.handler}`);
+    }
+    const handler = new cc.Component.EventHandler();
+    handler.target = target;
+    handler.component = eventSpec.component;
+    handler.handler = eventSpec.handler;
+    handler.customEventData = eventSpec.customEventData === undefined ? "" : String(eventSpec.customEventData);
+    // Creator 2.4 的 Inspector 同时保存组件名和脚本类 ID。只写组件名时，
+    // 新挂载脚本的事件可能在 Prefab 重新加载时被丢弃。类 ID 由已导入脚本
+    // 动态解析，避免蓝图或 Bridge 硬编码资源 UUID。
+    const componentId = (cc.js as any)._getClassId(componentClass);
+    if (componentId && !String(componentId).startsWith("cc.")) (handler as any)._componentId = componentId;
+    return handler;
 };
 
 /** 按蓝图应用节点基础属性。 */
@@ -232,8 +256,17 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
         }
         const components = Array.isArray(spec.components) ? spec.components : [];
         for (const componentSpec of components) {
-            const component = ensureBlueprintComponent(node, componentSpec.type);
+            ensureBlueprintComponent(node, componentSpec.type);
             summary.components++;
+        }
+    }
+
+    // 节点引用可能指向蓝图本次才新增的子组件。先完成全树组件创建，再绑定
+    // 属性，避免根组件按先序遍历解析时看不到尚未处理的子节点组件。
+    for (const item of workItems) {
+        const components = Array.isArray(item.spec.components) ? item.spec.components : [];
+        for (const componentSpec of components) {
+            const component = ensureBlueprintComponent(item.node, componentSpec.type);
             const properties = componentSpec.properties || {};
             for (const key of Object.keys(properties)) {
                 if (!(key in component)) {
@@ -252,17 +285,18 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
             const sourceType = eventSpec.sourceComponent || "cc.Button";
             const source = ensureBlueprintComponent(item.node, sourceType);
             const property = eventSpec.property || "clickEvents";
-            if (!Array.isArray(source[property])) throw new Error(`${sourceType}.${property} 不是事件数组`);
+            if (!(property in source)) throw new Error(`${sourceType} 不存在事件属性 ${property}`);
             const target = nodeMap[eventSpec.target || rootSpec.id];
             if (!target) throw new Error(`事件目标不存在: ${eventSpec.target || rootSpec.id}`);
-            const handler = new cc.Component.EventHandler();
-            handler.target = target;
-            handler.component = eventSpec.component;
-            handler.handler = eventSpec.handler;
-            handler.customEventData = eventSpec.customEventData === undefined ? "" : String(eventSpec.customEventData);
-            const exists = source[property].some((item) => item && item.target === target && item.component === handler.component && item.handler === handler.handler && String(item.customEventData || "") === handler.customEventData);
-            if (!exists) {
-                source[property] = source[property].concat([handler]);
+            const handler = createBlueprintEventHandler(target, eventSpec);
+            const current = source[property];
+            const values = Array.isArray(current) ? current : [current];
+            const exists = values.some((value) => value && value.target === target && value.component === handler.component && value.handler === handler.handler && String(value.customEventData || "") === handler.customEventData);
+            if (!exists && Array.isArray(current)) {
+                source[property] = current.concat([handler]);
+                summary.events++;
+            } else if (!exists) {
+                source[property] = handler;
                 summary.events++;
             }
         }
@@ -307,8 +341,12 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
         button: ["cc.Sprite", "cc.Button"],
         layout: ["cc.Layout"],
     };
+    const validationNodeMap = {};
+    const validationItems = [];
     const visit = (spec, node) => {
         checkedNodes++;
+        validationNodeMap[spec.id] = node;
+        validationItems.push({ spec, node });
         const required = (requiredTypeComponents[spec.type] || []).concat((spec.components || []).map((item) => item.type));
         required.forEach((type) => {
             checkedComponents++;
@@ -337,6 +375,28 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
         });
     };
     visit(rootSpec, root);
+    for (const item of validationItems) {
+        for (const eventSpec of item.spec.events || []) {
+            const sourceType = eventSpec.sourceComponent || "cc.Button";
+            const componentClass = getBlueprintComponentClass(sourceType);
+            const source = componentClass && item.node.getComponent(componentClass);
+            const property = eventSpec.property || "clickEvents";
+            const target = validationNodeMap[eventSpec.target || rootSpec.id];
+            if (!source || !(property in source)) {
+                errors.push(`节点 ${item.spec.id} 缺少事件源 ${sourceType}.${property}`);
+                continue;
+            }
+            if (!target) {
+                errors.push(`节点 ${item.spec.id} 的事件目标不存在: ${eventSpec.target || rootSpec.id}`);
+                continue;
+            }
+            const current = source[property];
+            const values = Array.isArray(current) ? current : [current];
+            const customEventData = eventSpec.customEventData === undefined ? "" : String(eventSpec.customEventData);
+            const exists = values.some((value) => value && value.target === target && value.component === eventSpec.component && value.handler === eventSpec.handler && String(value.customEventData || "") === customEventData);
+            if (!exists) errors.push(`节点 ${item.spec.id} 缺少事件 ${sourceType}.${property} -> ${eventSpec.component}.${eventSpec.handler}`);
+        }
+    }
     return { valid: errors.length === 0, errors: errors.slice(0, 50), checkedNodes, checkedComponents, rootUuid: root.uuid };
 };
 
@@ -1883,19 +1943,41 @@ export = {
     },
 
     /** 确认 Creator 仍可正常进入 Prefab 编辑模式并解析根节点。 */
-    "probe-prefab-health": function (event) {
+    "probe-prefab-health": function (event, args) {
         try {
             const editMode = Editor.require("scene://edit-mode");
             const scene = cc.director.getScene();
             const isPrefabMode = !!(editMode && editMode.curMode && editMode.curMode().name === "prefab");
             const roots = scene ? scene.children.filter((child) => child && cc.isValid(child)) : [];
-            const healthy = isPrefabMode && roots.length > 0;
+            const root = roots[0] || null;
+            const rootPrefabInfo = root ? (root as any)._prefab : null;
+            const actualPrefabUuid = rootPrefabInfo && rootPrefabInfo.asset
+                ? (rootPrefabInfo.asset._uuid || rootPrefabInfo.asset.uuid || "")
+                : "";
+            const expectedPrefabUuid = args && typeof args.expectedPrefabUuid === "string"
+                ? args.expectedPrefabUuid
+                : "";
+            const normalizeUuid = (uuid) => {
+                try {
+                    const uuidUtils = Editor.Utils && Editor.Utils.UuidUtils;
+                    return uuidUtils && uuidUtils.decompressUuid ? uuidUtils.decompressUuid(uuid) : uuid;
+                } catch (_error) {
+                    return uuid;
+                }
+            };
+            const targetMatches = !expectedPrefabUuid || (
+                !!actualPrefabUuid && normalizeUuid(actualPrefabUuid) === normalizeUuid(expectedPrefabUuid)
+            );
+            const healthy = isPrefabMode && roots.length > 0 && targetMatches;
             if (event.reply) event.reply(null, {
                 healthy,
                 mode: isPrefabMode ? "prefab" : "scene",
                 rootCount: roots.length,
-                rootName: roots[0] ? roots[0].name : "",
-                rootUuid: roots[0] ? roots[0].uuid : "",
+                rootName: root ? root.name : "",
+                rootUuid: root ? root.uuid : "",
+                actualPrefabUuid,
+                expectedPrefabUuid,
+                targetMatches,
             });
         } catch (error) {
             if (event.reply) event.reply(new Error(`Prefab 健康检查失败: ${error.message}`));
@@ -2180,7 +2262,16 @@ export = {
                     if (err) {
                         if (event.reply) event.reply(new Error(err.message || err));
                     } else {
-                        if (event.reply) event.reply(null, "预制体保存成功");
+                        waitForStableEditMode(editMode, "prefab")
+                            .then((state) => {
+                                if (event.reply) event.reply(null, {
+                                    message: "预制体保存成功且编辑模式已稳定",
+                                    ...state,
+                                });
+                            })
+                            .catch((error) => {
+                                if (event.reply) event.reply(new Error(`预制体保存后状态不稳定: ${error.message}`));
+                            });
                     }
                 });
             } else {
@@ -2194,12 +2285,20 @@ export = {
     "close-prefab": function (event, args) {
         try {
             const editMode = Editor.require("scene://edit-mode");
-            if (editMode && editMode.curMode().name === "prefab") {
-                editMode.pop();
-                if (event.reply) event.reply(null, "已触发退出预制体编辑模式");
-            } else {
-                if (event.reply) event.reply(new Error("当前不在预制体编辑模式中"));
+            if (!editMode || !editMode.curMode) {
+                if (event.reply) event.reply(new Error("无法读取 Creator 编辑模式"));
+                return;
             }
+            exitPrefabModeToScene(editMode)
+                .then((state) => {
+                    if (event.reply) event.reply(null, {
+                        message: state.popCount > 0 ? "已退出预制体编辑模式" : "当前已在普通场景模式",
+                        ...state,
+                    });
+                })
+                .catch((error) => {
+                    if (event.reply) event.reply(new Error(`退出预制体模式失败: ${error.message}`));
+                });
         } catch (e) {
             if (event.reply) event.reply(new Error("退出预制体模式发生异常: " + e.message));
         }
