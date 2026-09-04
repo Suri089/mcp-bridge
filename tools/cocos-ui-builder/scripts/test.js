@@ -110,6 +110,42 @@ async function run() {
         assert.strictEqual(createOnlyResult.valid, false);
         assert(createOnlyResult.errors.some(error => error.includes('create-only')));
 
+        const unstableRichTextBlueprint = clone(loaded.blueprint);
+        unstableRichTextBlueprint.root.children = [{
+            id: 'rich-text',
+            type: 'node',
+            transform: { width: 360, height: 40 },
+            components: [{ type: 'cc.RichText' }],
+        }];
+        const unstableRichTextResult = validateBlueprint(unstableRichTextBlueprint);
+        assert.strictEqual(unstableRichTextResult.valid, false);
+        assert(unstableRichTextResult.errors.some(error => error.includes('properties.string')));
+        assert(unstableRichTextResult.errors.some(error => error.includes('transform.width/height')));
+
+        const stableRichTextBlueprint = clone(loaded.blueprint);
+        stableRichTextBlueprint.root.children = [{
+            id: 'rich-text',
+            type: 'node',
+            components: [{
+                type: 'cc.RichText',
+                properties: { string: '', maxWidth: 360, lineHeight: 40 },
+            }],
+        }];
+        const stableRichTextResult = validateBlueprint(stableRichTextBlueprint);
+        assert.strictEqual(stableRichTextResult.valid, true);
+
+        // 图集子资源由 Creator 通过完整 db:// URL 解析；纯文件预检只需确认
+        // 子资源所属的 plist 存在，不能把末尾帧名误当成独立磁盘文件。
+        fs.mkdirSync(path.join(tempProject, 'assets', 'atlas'), { recursive: true });
+        fs.writeFileSync(path.join(tempProject, 'assets', 'atlas', 'cards.plist'), 'fixture', 'utf8');
+        const subAssetBlueprint = clone(loaded.blueprint);
+        subAssetBlueprint.root.components = [{
+            type: 'cc.Sprite',
+            properties: { spriteFrame: { $asset: 'db://assets/atlas/cards.plist/card_frame.png' } },
+        }];
+        const subAssetResult = dryRun(tempProject, writeFixture(tempProject, 'sub-asset.json', subAssetBlueprint));
+        assert.deepStrictEqual(subAssetResult.missingAssets, []);
+
         // 已有目标的外部恢复必须逐字节还原操作前内容。
         const existingTransaction = beginSafetyBackup(loaded.blueprint, tempProject);
         fs.writeFileSync(existingTarget, 'corrupted', 'utf8');

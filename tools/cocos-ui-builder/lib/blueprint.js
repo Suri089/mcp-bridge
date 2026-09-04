@@ -81,6 +81,17 @@ function validateBlueprint(blueprint) {
         for (const component of Array.isArray(node.components) ? node.components : []) {
             components++;
             if (!component || typeof component.type !== 'string') errors.push(`${nodePath} 存在无效组件`);
+            if (component && component.type === 'cc.RichText') {
+                const properties = component.properties && typeof component.properties === 'object'
+                    ? component.properties
+                    : {};
+                if (!Object.prototype.hasOwnProperty.call(properties, 'string')) {
+                    errors.push(`${nodePath} 的 cc.RichText 必须显式声明 properties.string，避免 Creator 默认示例文本在打开时改写 Prefab`);
+                }
+                if (node.transform && (node.transform.width !== undefined || node.transform.height !== undefined)) {
+                    errors.push(`${nodePath} 的 cc.RichText 会自动维护节点尺寸，不得同时声明 transform.width/height；请使用 maxWidth 和 lineHeight`);
+                }
+            }
             collectValue(component && component.properties);
         }
         if (node.events !== undefined && !Array.isArray(node.events)) errors.push(`${nodePath}.events 必须是数组`);
@@ -117,7 +128,9 @@ function dbUrlToCandidate(projectRoot, url) {
     const relative = url.slice('db://'.length);
     const direct = path.join(projectRoot, relative.replace(/\//g, path.sep));
     if (fs.existsSync(direct)) return direct;
-    const assetMatch = relative.match(/^(.*\.(?:png|jpg|jpeg|plist|atlas|ttf|fnt|prefab|fire))(?:\/.*)?$/i);
+    // 子资源 URL 形如 `atlas.plist/frame.png`。这里必须优先截取第一个真实
+    // 资源扩展名；贪婪匹配会错误截到末尾的 frame.png，并把有效图集误报缺失。
+    const assetMatch = relative.match(/^(.*?\.(?:png|jpg|jpeg|plist|atlas|ttf|fnt|prefab|fire))(?:\/.*)?$/i);
     return assetMatch ? path.join(projectRoot, assetMatch[1].replace(/\//g, path.sep)) : direct;
 }
 

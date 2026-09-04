@@ -19,6 +19,10 @@ Schema：`packages/mcp-bridge/tools/cocos-ui-builder/schema/ui-blueprint.schema.
 
 `components` 可额外挂载 Cocos 内置组件或已完成编译的项目组件。
 
+`cc.RichText` 必须显式声明 `properties.string`，并使用 `maxWidth`、`lineHeight`
+控制排版。不要同时给 RichText 节点声明 `transform.width/height`；Creator 会根据
+富文本内容自动维护节点尺寸，否则 Prefab 打开时可能被反复标记为已修改。
+
 ## 引用
 
 资源引用使用路径：

@@ -2277,22 +2277,32 @@ export = {
         try {
             const editMode = Editor.require("scene://edit-mode");
             if (editMode && editMode.curMode().name === "prefab") {
-                editMode.save((err) => {
-                    if (err) {
-                        if (event.reply) event.reply(new Error(err.message || err));
-                    } else {
-                        waitForStableEditMode(editMode, "prefab")
-                            .then((state) => {
-                                if (event.reply) event.reply(null, {
-                                    message: "预制体保存成功且编辑模式已稳定",
-                                    ...state,
-                                });
-                            })
-                            .catch((error) => {
-                                if (event.reply) event.reply(new Error(`预制体保存后状态不稳定: ${error.message}`));
-                            });
+                // RichText、Layout 等组件会在属性写入后的后续编辑器帧中重算节点尺寸。
+                // 若立即保存，重算发生在保存之后，Prefab 根实例会再次变脏并在退出或
+                // 下次打开时触发“应用/回退”。等待短暂稳定窗口后再调用 Creator 的
+                // 正式保存接口，确保自动布局结果一并进入同一次保存。
+                setTimeout(() => {
+                    if (!editMode.curMode || editMode.curMode().name !== "prefab") {
+                        if (event.reply) event.reply(new Error("等待组件稳定期间已离开预制体编辑模式"));
+                        return;
                     }
-                });
+                    editMode.save((err) => {
+                        if (err) {
+                            if (event.reply) event.reply(new Error(err.message || err));
+                        } else {
+                            waitForStableEditMode(editMode, "prefab")
+                                .then((state) => {
+                                    if (event.reply) event.reply(null, {
+                                        message: "预制体保存成功且编辑模式已稳定",
+                                        ...state,
+                                    });
+                                })
+                                .catch((error) => {
+                                    if (event.reply) event.reply(new Error(`预制体保存后状态不稳定: ${error.message}`));
+                                });
+                        }
+                    });
+                }, 350);
             } else {
                 if (event.reply) event.reply(new Error("当前不在预制体编辑模式中"));
             }
