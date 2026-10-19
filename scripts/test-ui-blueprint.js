@@ -73,6 +73,11 @@ try {
     delete strictBlueprint.root.unexpected;
     strictBlueprint.root.components = [{ type: 'StrictView', properties: { icon: { $asset: 'db://internal/icon' } } }];
     expectInvalid(strictBlueprint, 'db://assets/');
+    strictBlueprint.root.components = [
+        { type: 'NodeOrderGroup', properties: { type: 101 } },
+        { type: 'NodeOrderGroup', properties: { type: 305 } },
+    ];
+    expectInvalid(strictBlueprint, '重复声明组件类型');
 
     const scan = UiBlueprint.scanAssets({ keywords: ['button'], limit: 10 });
     assert(scan.assets.some(item => item.url === 'db://assets/textures/button.png'), JSON.stringify(scan));

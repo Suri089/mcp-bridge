@@ -192,11 +192,16 @@ export class UiBlueprint {
 			if (node.components !== undefined && !Array.isArray(node.components)) {
 				errors.push(`${nodePath}.components 必须是数组`);
 			} else if (Array.isArray(node.components)) {
+				const componentTypes = new Set<string>();
 				node.components.forEach((component: any, index: number) => {
 					components++;
 					assertKnownKeys(component, ["type", "properties"], `${nodePath}.components[${index}]`);
 					if (!component || typeof component.type !== "string" || !component.type.trim()) {
 						errors.push(`${nodePath}.components[${index}].type 必须是非空字符串`);
+					}
+					if (component && typeof component.type === 'string') {
+						if (componentTypes.has(component.type)) errors.push(`${nodePath} 重复声明组件类型 ${component.type}；蓝图 v1 无法区分同类组件实例`);
+						componentTypes.add(component.type);
 					}
 					if (component && component.properties !== undefined && (!component.properties || typeof component.properties !== "object" || Array.isArray(component.properties))) {
 						errors.push(`${nodePath}.components[${index}].properties 必须是对象`);

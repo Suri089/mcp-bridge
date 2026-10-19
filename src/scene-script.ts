@@ -3,6 +3,7 @@
 
 import { findAutoSyncPrefabInstances } from "./utils/PrefabSyncGuard";
 import { exitPrefabModeToScene, waitForStableEditMode } from "./utils/EditModeTransition";
+import { ComponentIdentityError, compareRepeatedComponents, getUniqueComponent, selectComponentForMutation, snapshotRepeatedComponents } from './utils/ComponentIdentityGuard';
 
 /**
  * 新建 Prefab 时蓝图根节点故意不挂到当前场景，避免污染或标脏用户正在编辑的
@@ -48,13 +49,13 @@ const ensureBlueprintComponent = (node, type) => {
     if (!componentClass || !cc.js.isChildClassOf(componentClass, cc.Component)) {
         throw new Error(`找不到合法组件类型: ${type}`);
     }
-    return node.getComponent(componentClass) || node.addComponent(componentClass);
+    return getUniqueComponent(node, componentClass, type) || node.addComponent(componentClass);
 };
 
 /** 创建可由 Creator 2.4 Inspector 稳定序列化的事件处理器。 */
 const createBlueprintEventHandler = (target, eventSpec) => {
     const componentClass = getBlueprintComponentClass(eventSpec.component);
-    const targetComponent = componentClass && target.getComponent(componentClass);
+    const targetComponent = componentClass && getUniqueComponent(target, componentClass, eventSpec.component);
     if (!targetComponent) {
         throw new Error(`事件目标节点 ${target.name} 缺少组件 ${eventSpec.component}`);
     }
@@ -148,7 +149,7 @@ const resolveBlueprintValue = async (value, nodeMap) => {
         const node = nodeMap[value.$component.node];
         if (!node) throw new Error(`找不到组件节点引用: ${value.$component.node}`);
         const componentClass = getBlueprintComponentClass(value.$component.type);
-        const component = componentClass && node.getComponent(componentClass);
+        const component = componentClass && getUniqueComponent(node, componentClass, value.$component.type);
         if (!component) throw new Error(`节点 ${value.$component.node} 缺少组件 ${value.$component.type}`);
         return component;
     }
@@ -317,7 +318,7 @@ const applyUiBlueprintToScene = async (blueprint, createRoot) => {
 };
 
 /** 对当前节点树执行轻量语义校验。 */
-const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false) => {
+const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false, repeatedComponents = []) => {
     const scene = cc.director.getScene();
     const rootSpec = blueprint.root;
     const rootName = rootSpec.name || rootSpec.id;
@@ -335,6 +336,18 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
     }
     if (!root) return { valid: false, errors: [`找不到蓝图根节点: ${rootName}`], checkedNodes, checkedComponents };
 
+    const componentIntegrity = compareRepeatedComponents(repeatedComponents, snapshotRepeatedComponents(Editor.serialize(root, { reserveContentsForSyncablePrefab: true })));
+    errors.push(...componentIntegrity.errors);
+    const findUniqueComponent = (node, type) => {
+        const componentClass = getBlueprintComponentClass(type);
+        try {
+            return componentClass && getUniqueComponent(node, componentClass, type);
+        } catch (error) {
+            errors.push(error.message);
+            return null;
+        }
+    };
+
     const requiredTypeComponents = {
         sprite: ["cc.Sprite"],
         label: ["cc.Label"],
@@ -350,16 +363,14 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
         const required = (requiredTypeComponents[spec.type] || []).concat((spec.components || []).map((item) => item.type));
         required.forEach((type) => {
             checkedComponents++;
-            const componentClass = getBlueprintComponentClass(type);
-            if (!componentClass || !node.getComponent(componentClass)) errors.push(`节点 ${spec.id} 缺少组件 ${type}`);
+            if (!findUniqueComponent(node, type)) errors.push(`节点 ${spec.id} 缺少唯一组件 ${type}`);
         });
         if (spec.asset) {
             const sprite = node.getComponent(cc.Sprite);
             if (!sprite || !sprite.spriteFrame) errors.push(`节点 ${spec.id} 缺少 SpriteFrame 资源`);
         }
         (spec.components || []).forEach((componentSpec) => {
-            const componentClass = getBlueprintComponentClass(componentSpec.type);
-            const component = componentClass && node.getComponent(componentClass);
+            const component = findUniqueComponent(node, componentSpec.type);
             if (!component) return;
             Object.keys(componentSpec.properties || {}).forEach((key) => {
                 const expected = componentSpec.properties[key];
@@ -378,8 +389,7 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
     for (const item of validationItems) {
         for (const eventSpec of item.spec.events || []) {
             const sourceType = eventSpec.sourceComponent || "cc.Button";
-            const componentClass = getBlueprintComponentClass(sourceType);
-            const source = componentClass && item.node.getComponent(componentClass);
+            const source = findUniqueComponent(item.node, sourceType);
             const property = eventSpec.property || "clickEvents";
             const target = validationNodeMap[eventSpec.target || rootSpec.id];
             if (!source || !(property in source)) {
@@ -397,7 +407,7 @@ const validateUiBlueprintInScene = (blueprint, rootId, requirePrefabMode = false
             if (!exists) errors.push(`节点 ${item.spec.id} 缺少事件 ${sourceType}.${property} -> ${eventSpec.component}.${eventSpec.handler}`);
         }
     }
-    return { valid: errors.length === 0, errors: errors.slice(0, 50), checkedNodes, checkedComponents, rootUuid: root.uuid };
+    return { valid: errors.length === 0, errors: errors.slice(0, 50), checkedNodes, checkedComponents, componentIntegrity, rootUuid: root.uuid };
 };
 
 export = {
@@ -1009,7 +1019,7 @@ export = {
                                 if (propertyType === cc.Node) {
                                     finalValue = targetNode;
                                 } else {
-                                    const targetComp = targetNode.getComponent(propertyType);
+                                    const targetComp = getUniqueComponent(targetNode, propertyType, propertyType.name);
                                     if (targetComp) {
                                         finalValue = targetComp;
                                     } else {
@@ -1045,6 +1055,7 @@ export = {
                             }
                         }
                     } catch (e) {
+                        if (e instanceof ComponentIdentityError) throw e;
                         Editor.warn(`[scene-script] 解析属性 ${key} 失败: ${e.message}`);
                     }
 
@@ -1129,7 +1140,7 @@ export = {
 
                     if (!component) {
                         // 引擎底层 (如 _checkMultipleComp) 可能拦截了唯一组件，导致返回 null
-                        component = node.getComponent(compClass);
+                        component = getUniqueComponent(node, compClass, componentType);
                         if (!component) {
                             if (event.reply) event.reply(new Error(`添加组件失败，引擎返回 null 且未找到已有同类组件: ${componentType}`));
                             return;
@@ -1160,32 +1171,8 @@ export = {
                 }
 
                 try {
-                    // 查找并移除组件
-                    let component = null;
-                    if (componentId) {
-                        if (node._components) {
-                            for (let i = 0; i < node._components.length; i++) {
-                                if (node._components[i].uuid === componentId) {
-                                    component = node._components[i];
-                                    break;
-                                }
-                            }
-                        }
-                    } else if (componentType) {
-                        let compClass = null;
-                        if (componentType.startsWith("cc.")) {
-                            const className = componentType.replace("cc.", "");
-                            compClass = cc[className];
-                        } else {
-                            compClass = cc.js.getClassByName(componentType);
-                            if (!compClass && cc[componentType]) {
-                                compClass = cc[componentType];
-                            }
-                        }
-                        if (compClass) {
-                            component = node.getComponent(compClass);
-                        }
-                    }
+                    const compClass = getBlueprintComponentClass(componentType);
+                    const component = selectComponentForMutation(node, componentId, compClass, componentType);
 
                     if (component) {
                         node.removeComponent(component);
@@ -1208,36 +1195,8 @@ export = {
                 }
 
                 try {
-                    let targetComp = null;
-
-                    // 1. 尝试通过 componentId 查找
-                    if (componentId) {
-                        if (node._components) {
-                            for (let i = 0; i < node._components.length; i++) {
-                                if (node._components[i].uuid === componentId) {
-                                    targetComp = node._components[i];
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. 尝试通过 type 查找
-                    if (!targetComp && componentType) {
-                        let compClass = null;
-                        if (componentType.startsWith("cc.")) {
-                            const className = componentType.replace("cc.", "");
-                            compClass = cc[className];
-                        } else {
-                            compClass = cc.js.getClassByName(componentType);
-                            if (!compClass && cc[componentType]) {
-                                compClass = cc[componentType];
-                            }
-                        }
-                        if (compClass) {
-                            targetComp = node.getComponent(compClass);
-                        }
-                    }
+                    const compClass = getBlueprintComponentClass(componentType);
+                    const targetComp = selectComponentForMutation(node, componentId, compClass, componentType);
 
                     if (targetComp) {
                         if (properties) {
@@ -1947,7 +1906,7 @@ export = {
     /** 校验当前 Prefab/场景是否满足 UI 蓝图。 */
     "validate-ui-blueprint": function (event, args) {
         try {
-            const result = validateUiBlueprintInScene(args.blueprint, args.rootId, args.requirePrefabMode === true);
+            const result = validateUiBlueprintInScene(args.blueprint, args.rootId, args.requirePrefabMode === true, args.repeatedComponents || []);
             if (event.reply) event.reply(null, result);
         } catch (error) {
             if (event.reply) event.reply(new Error(`校验 UI 蓝图失败: ${error.message}`));

@@ -134,6 +134,13 @@ async function run() {
         const stableRichTextResult = validateBlueprint(stableRichTextBlueprint);
         assert.strictEqual(stableRichTextResult.valid, true);
 
+        const repeatedComponentBlueprint = clone(loaded.blueprint);
+        repeatedComponentBlueprint.root.components = [
+            { type: 'NodeOrderGroup', properties: { type: 101 } },
+            { type: 'NodeOrderGroup', properties: { type: 305 } },
+        ];
+        expectInvalid(repeatedComponentBlueprint, '重复声明组件类型');
+
         // 图集子资源由 Creator 通过完整 db:// URL 解析；纯文件预检只需确认
         // 子资源所属的 plist 存在，不能把末尾帧名误当成独立磁盘文件。
         fs.mkdirSync(path.join(tempProject, 'assets', 'atlas'), { recursive: true });

@@ -78,9 +78,14 @@ function validateBlueprint(blueprint) {
         }
         if (typeof node.asset === 'string') assets.add(node.asset);
         if (node.components !== undefined && !Array.isArray(node.components)) errors.push(`${nodePath}.components 必须是数组`);
+        const componentTypes = new Set();
         for (const component of Array.isArray(node.components) ? node.components : []) {
             components++;
             if (!component || typeof component.type !== 'string') errors.push(`${nodePath} 存在无效组件`);
+            if (component && typeof component.type === 'string') {
+                if (componentTypes.has(component.type)) errors.push(`${nodePath} 重复声明组件类型 ${component.type}；蓝图 v1 无法区分同类组件实例`);
+                componentTypes.add(component.type);
+            }
             if (component && component.type === 'cc.RichText') {
                 const properties = component.properties && typeof component.properties === 'object'
                     ? component.properties

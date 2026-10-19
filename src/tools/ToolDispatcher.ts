@@ -8,6 +8,7 @@ import { OfflinePrefabEditor } from '../utils/OfflinePrefabEditor';
 import { UiBlueprint } from '../utils/UiBlueprint';
 import { CommandQueue } from '../core/CommandQueue';
 import { McpWrappers } from '../core/McpWrappers';
+import { compareRepeatedComponents, snapshotRepeatedComponents } from '../utils/ComponentIdentityGuard';
 declare const Editor: any;
 
 function getNewSceneTemplate() { return `[
@@ -838,6 +839,7 @@ export class ToolDispatcher {
 			return callback(`目标 Prefab 不存在，但蓝图指定了 update-only: ${targetUrl}`);
 		}
 		let originalPrefabSource = null;
+		let repeatedComponents = [];
 		if (targetExists) {
 			try {
 				const prefabFspath = Editor.assetdb.urlToFspath(targetUrl);
@@ -845,7 +847,7 @@ export class ToolDispatcher {
 					return callback(`无法读取目标 Prefab，已拒绝修改: ${targetUrl}`);
 				}
 				originalPrefabSource = fs.readFileSync(prefabFspath, "utf8");
-				JSON.parse(originalPrefabSource);
+				repeatedComponents = snapshotRepeatedComponents(originalPrefabSource);
 			} catch (error) {
 				return callback(`目标 Prefab 现有内容无法安全备份或解析，已拒绝修改: ${error.message}`);
 			}
@@ -861,6 +863,11 @@ export class ToolDispatcher {
 		const finish = (err, result) => {
 			ToolDispatcher.isSceneBusy = false;
 			callback(err, result);
+		};
+
+		const checkSavedComponents = () => {
+			const prefabFspath = Editor.assetdb.urlToFspath(targetUrl);
+			return compareRepeatedComponents(repeatedComponents, snapshotRepeatedComponents(fs.readFileSync(prefabFspath, 'utf8')));
 		};
 
 		// 所有写入前拒绝统一返回机器可读阶段和无磁盘变化契约。CLI 因此可以
@@ -909,11 +916,17 @@ export class ToolDispatcher {
 				CommandQueue.callSceneScriptWithTimeout(
 						"mcp-bridge",
 						"validate-ui-blueprint",
-						{ blueprint, requirePrefabMode: true },
+						{ blueprint, requirePrefabMode: true, repeatedComponents },
 						(validationErr, validationResult) => {
 							if (validationErr) return done(validationErr);
 							if (!validationResult || validationResult.valid !== true) {
 								return done(`重新打开后的 Prefab 语义校验失败: ${JSON.stringify(validationResult || {})}`);
+							}
+							try {
+								const componentIntegrity = checkSavedComponents();
+								if (!componentIntegrity.valid) return done(componentIntegrity.errors.join('; '));
+							} catch (error) {
+								return done(`保存后的重复组件检查失败: ${error.message}`);
 							}
 							done(null, { ...probeResult, validation: validationResult });
 						},
@@ -970,6 +983,12 @@ export class ToolDispatcher {
 				if (!closeAfterSave) return finish(null, successResult);
 				const closeVerifiedPrefab = () => closeCurrentPrefab((closeErr) => {
 					if (closeErr) return rollbackSavedTarget(closeErr, partialResult);
+					try {
+						const componentIntegrity = checkSavedComponents();
+						if (!componentIntegrity.valid) return rollbackSavedTarget(componentIntegrity.errors.join('; '), partialResult);
+					} catch (error) {
+						return rollbackSavedTarget(`退出后的重复组件检查失败: ${error.message}`, partialResult);
+					}
 					finish(null, { ...successResult, health: { ...successResult.health, closedAfterCheck: true } });
 				});
 				// 新建 Prefab 首次导入后，Creator 2.4 可能会在编辑根节点上补齐内部
@@ -994,7 +1013,7 @@ export class ToolDispatcher {
 			CommandQueue.callSceneScriptWithTimeout(
 				"mcp-bridge",
 				"validate-ui-blueprint",
-				{ blueprint, rootId: applyResult && applyResult.rootUuid },
+				{ blueprint, rootId: applyResult && applyResult.rootUuid, repeatedComponents },
 				(err, validationResult) => {
 					if (err) return done(err);
 					if (!validationResult || validationResult.valid !== true) {
@@ -1637,6 +1656,10 @@ export default class NewScript extends cc.Component {
 						? "全局刷新 db://assets 会阻塞编辑器数分钟。请仅刷新具体修改的文件路径（如 db://assets/scripts/MyScript.ts）。"
 						: `目录级刷新 "${refreshPath}" 会阻塞编辑器主线程，且可能触发编译级联卡死。请仅刷新该目录下具体修改的单个文件。`;
 					return callback(hint);
+				}
+				// 已有脚本由 Creator 监听导入，逐文件刷新会重复编译并增加 Prefab 同步机会。
+				if (/\.(ts|js)$/i.test(refreshPath) && Editor.assetdb.exists(refreshPath) && properties.forceScriptRefresh !== true) {
+					return callback(null, { refreshed: false, skipped: true, path: refreshPath, reason: '已有脚本由 Creator 文件监听导入，已跳过额外刷新；只有确认导入异常后才使用 forceScriptRefresh=true' });
 				}
 				Editor.assetdb.refresh(refreshPath, (err) => {
 					if (err) {

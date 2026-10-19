@@ -1,7 +1,7 @@
 // @ts-nocheck
 export const getToolsList = () => {
 	const globalPrecautions =
-		"【AI 安全守则】: 1. 执行任何写操作前必须先通过 get_scene_hierarchy 或 manage_components(get) 验证主体存在。 2. 严禁基于假设盲目猜测属性名。 3. 资源属性（如 cc.Prefab）必须通过 UUID 进行赋值。 4. 严禁频繁刷新全局资源 (refresh_editor)，必须通过 properties.path 指定具体修改的文件或目录以防止编辑器长期卡死。";
+		"【AI 安全守则】: 1. 执行任何写操作前必须先通过 get_scene_hierarchy 或 manage_components(get) 验证主体存在。 2. 严禁基于假设盲目猜测属性名。 3. 资源属性（如 cc.Prefab）必须通过 UUID 进行赋值。 4. refresh_editor 只接受具体文件；已有脚本依靠自动导入，禁止额外逐文件刷新。";
 	return [
 		{
 			name: "scan_ui_assets",
@@ -225,7 +225,7 @@ export const getToolsList = () => {
 							"操作类型 (add: 添加组件, remove: 移除组件, update: 更新组件属性, get: 获取组件列表)",
 					},
 					componentType: { type: "string", description: "组件类型，如 cc.Sprite (add/update 操作需要)" },
-					componentId: { type: "string", description: "组件 ID (remove/update 操作可选)" },
+					componentId: { type: "string", description: "组件 ID。同节点有多个同类组件时，remove/update 必须提供；ID 无效时不会退回按类型匹配。" },
 					properties: {
 						type: "object",
 						description:
@@ -237,7 +237,7 @@ export const getToolsList = () => {
 		},
 		{
 			name: "manage_script",
-			description: `${globalPrecautions} 管理脚本文件。注意：创建或修改脚本需时间编译。创建后必须调用 refresh_editor (务必指定 path) 生成 meta 文件，否则无法作为组件添加。`,
+			description: `${globalPrecautions} 管理脚本文件。创建或修改后等待 Creator 文件监听完成导入与编译，不要额外逐文件刷新已有脚本。新文件只有在 AssetDB 尚未导入时才定向刷新。`,
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -340,7 +340,7 @@ export const getToolsList = () => {
 					properties: {
 						type: "object",
 						description:
-							"操作属性。⚠️硬性限制：refresh_editor 仅接受单文件路径（带后缀名如 'db://assets/scripts/MyScript.ts'）。目录路径和 db://assets 全局路径已被代码层拒绝，传入将直接报错。这是因为目录级刷新会阻塞编辑器主线程数分钟并触发编译级联卡死。修改多个文件后请逐个刷新。",
+							"操作属性。refresh_editor 仅接受单文件 properties.path，拒绝目录或全局刷新。已有 ts/js 默认跳过额外刷新，由 Creator 自动导入；只有确认导入异常后才可传 properties.forceScriptRefresh=true。重复刷新可能增加 Creator 2.4 的 Prefab 同步风险。",
 					},
 				},
 				required: ["action"],

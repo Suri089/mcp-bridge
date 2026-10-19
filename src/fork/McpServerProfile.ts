@@ -6,6 +6,7 @@ export const serverInstructions = [
     'Before calling project tools, call get_active_instances. If more than one Cocos Creator project is running, select the intended project by projectPath with set_active_instance; never guess or silently choose the first project.',
     'Before writes, inspect the target with get_scene_hierarchy, manage_components(get), search_project, or the relevant read tool. Do not guess node IDs, component types, property names, asset UUIDs, or paths.',
     'Follow the target repository AGENTS.md and local project rules. Do not use modify_scene_offline or modify_prefab_offline when project rules prohibit direct serialized scene or prefab edits.',
+    'Let Creator import existing TS/JS edits through its file watcher; do not refresh every modified script. Use forceScriptRefresh only to recover a confirmed import failure. Repeated components must be addressed by componentId, never by the first type match. Existing repeated component values and order must survive Prefab transactions.',
     'After changes, save through the appropriate tool, read the changed state again, and inspect console output or an editor screenshot when useful. Treat delete, move, overwrite, build, and offline serialized-asset edits as potentially destructive.',
     'If the selected instance disappears or its port is reused by a different project, stop and select the project again.'
 ].join(' ');
